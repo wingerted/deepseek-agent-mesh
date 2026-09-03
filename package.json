@@ -1,0 +1,26 @@
+{
+  "name": "agent-mesh-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "test": "pnpm -r --if-present test",
+    "pack:plugins": "node tooling/pack-plugins.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-llm": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-subagent": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-subprocess": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tool-subagent": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tools": "0.1.2-alpha.4",
+    "@deepseek-ai/schemastery": "3.18.2",
+    "smol-toml": "1.7.1"
+  }
+}

@@ -1,0 +1,25 @@
+[harness]
+profile = "web"
+host = "10.200.191.4"
+port = 8787
+
+[mesh]
+network_id = "default"
+node_name = "deepseek-harness"
+listen = [
+  "/ip4/10.200.191.4/tcp/41001",
+  "/ip4/10.200.191.4/udp/41001/quic-v1",
+]
+bootstrap = []
+allow_peers = []
+allow_all_peers = false
+private_networks = ["wireguard"]
+
+# Replace these declarations after an iperf3 test. They are not observations.
+[capacity]
+ingress_mbps = 1000
+egress_mbps = 100
+region = "local"
+zone = "default"
+idle_price_per_gib = 0
+busy_price_per_gib = 0

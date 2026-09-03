@@ -1,0 +1,7 @@
+- insert:
+    - id: agent-mesh-web
+      name: 'dsh-agent-mesh-web'
+      config:
+        maxPeers: 256
+        refreshIntervalMs: 5000
+        requestTimeoutMs: 3000

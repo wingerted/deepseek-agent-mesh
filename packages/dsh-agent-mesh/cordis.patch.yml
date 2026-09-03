@@ -1,0 +1,71 @@
+- insert:
+    - id: agent-mesh-service
+      name: 'dsh-agent-mesh/service'
+      config:
+        mode: !!js process.env.AGENT_MESH_MODE ?? 'managed'
+        binary: !!js process.env.AGENT_MESH_BIN ?? 'agent-mesh'
+        stateDir: !!js process.env.AGENT_MESH_STATE_DIR ?? dshHomePath('agent-mesh')
+        networkId: !!js process.env.AGENT_MESH_NETWORK_ID ?? 'default'
+        nodeName: !!js process.env.AGENT_MESH_NODE_NAME ?? 'deepseek-harness'
+        listen: !!js (process.env.AGENT_MESH_LISTEN ?? '').split(',').filter(Boolean)
+        bootstrap: !!js (process.env.AGENT_MESH_BOOTSTRAP ?? '').split(',').filter(Boolean)
+        allowPeers: !!js (process.env.AGENT_MESH_ALLOW_PEERS ?? '').split(',').filter(Boolean)
+        allowAllPeers: !!js process.env.AGENT_MESH_ALLOW_ALL_PEERS === '1'
+        privateNetworks: !!js (process.env.AGENT_MESH_PRIVATE_NETWORKS ?? '').split(',').filter(Boolean)
+        region: !!js process.env.AGENT_MESH_REGION ?? 'local'
+        zone: !!js process.env.AGENT_MESH_ZONE ?? 'default'
+        ingressMbps: !!js Number(process.env.AGENT_MESH_INGRESS_MBPS ?? 1000)
+        egressMbps: !!js Number(process.env.AGENT_MESH_EGRESS_MBPS ?? 100)
+        idlePricePerGib: !!js Number(process.env.AGENT_MESH_IDLE_PRICE_PER_GIB ?? 0)
+        busyPricePerGib: !!js Number(process.env.AGENT_MESH_BUSY_PRICE_PER_GIB ?? 0)
+        leaderProtocols: [dsh-leader/1]
+        leaderRoles: !!js (process.env.AGENT_MESH_LEADER_ROLES ?? 'general').split(',').filter(Boolean)
+        leaderWorkspaces: !!js (process.env.AGENT_MESH_LEADER_WORKSPACES ?? 'default').split(',').filter(Boolean)
+        leaderTeamEnabled: true
+        leaderMaxParallelTasks: 1
+        allowSourceDelete: false
+        startupTimeoutMs: 15000
+
+    - id: agent-mesh-leader
+      name: 'dsh-agent-mesh/leader'
+
+    - id: agent-mesh-leader-provider
+      name: 'dsh-agent-mesh/leader-provider'
+      config:
+        providerName: mesh-leader
+        peerId: !!js process.env.AGENT_MESH_LEADER_PEER || undefined
+        workspaceAlias: !!js process.env.AGENT_MESH_WORKSPACE_ALIAS ?? 'default'
+        role: !!js process.env.AGENT_MESH_LEADER_ROLE || undefined
+        hopBudget: 1
+        pollIntervalMs: 500
+        resultTimeoutMs: 3600000
+        cancelGraceMs: 5000
+
+    - id: agent-mesh-guidance
+      name: 'dsh-agent-mesh/guidance'
+      config:
+        peerId: !!js process.env.AGENT_MESH_LEADER_PEER || undefined
+        workspaceAlias: !!js process.env.AGENT_MESH_WORKSPACE_ALIAS ?? 'default'
+        role: !!js process.env.AGENT_MESH_LEADER_ROLE || undefined
+        maxPeers: 8
+        discoveryTimeoutMs: 1000
+
+    - id: agent-mesh-leader-tools
+      name: 'dsh-agent-mesh/leader-tools'
+
+    - id: agent-mesh-delegate-tool
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: mesh-leader
+        toolName: mesh_delegate
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: agent-mesh-tools
+      name: 'dsh-agent-mesh/tools'
+
+    - id: agent-mesh-inbox
+      name: 'dsh-agent-mesh/inbox'
+      config:
+        enabled: true
+        pollIntervalMs: 1000

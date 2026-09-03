@@ -1,0 +1,13 @@
+.pixi/
+target/
+node_modules/
+packages/*/node_modules/
+packages/*/lib/
+dist/
+artifacts/
+.agent-mesh/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.local.toml
+.env.local

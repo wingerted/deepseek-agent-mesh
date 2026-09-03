@@ -1,0 +1,22 @@
+[harness]
+profile = "web"
+host = "127.0.0.1"
+port = 8787
+
+[mesh]
+network_id = "default"
+node_name = "deepseek-harness"
+listen = []
+bootstrap = []
+allow_peers = []
+allow_all_peers = false
+private_networks = []
+
+# These are operator declarations used by routing, not speed-test results.
+[capacity]
+ingress_mbps = 1000
+egress_mbps = 100
+region = "local"
+zone = "default"
+idle_price_per_gib = 0
+busy_price_per_gib = 0
