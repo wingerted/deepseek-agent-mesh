@@ -32,8 +32,8 @@ tests:
       - test -f "$PREFIX/libexec/agent-mesh/plugins/dsh-agent-mesh-web/lib/client.js"
 
 about:
-  homepage: https://github.com/agent-mesh/agent-mesh
-  repository: https://github.com/agent-mesh/agent-mesh
+  homepage: https://github.com/wingerted/deepseek-agent-mesh
+  repository: https://github.com/wingerted/deepseek-agent-mesh
   license: MIT
   license_file: LICENSE
   summary: Decentralized DeepSeek Harness Leader mesh

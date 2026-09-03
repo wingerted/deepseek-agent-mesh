@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check (Linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out compatible DeepSeek Harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: 4e84901e6471b79ec0338099867ebb4606d12bb5
+          path: deepseek-harness
+          persist-credentials: false
+
+      - name: Set up Pixi
+        uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: v0.59.0
+          cache: true
+
+      - name: Install JavaScript workspaces
+        run: |
+          pixi run bootstrap
+          pixi run pnpm --dir deepseek-harness install --frozen-lockfile
+
+      - name: Run checks
+        run: pixi run check
+
+      - name: Verify packaged Harness profile
+        env:
+          DSH_REPO: ${{ github.workspace }}/deepseek-harness
+        run: pixi run test-packed

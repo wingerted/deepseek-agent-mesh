@@ -1,5 +1,7 @@
 # Agent Mesh
 
+[![CI](https://github.com/wingerted/deepseek-agent-mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/wingerted/deepseek-agent-mesh/actions/workflows/ci.yml)
+
 `agent-mesh` 是一个由单一 Pixi workspace 管理的 Agent P2P monorepo。它同时交付独立 Rust binary、DeepSeek Harness Leader 插件、Harness Web 状态/拓扑插件，以及二者共享的本地 RPC client。
 
 网络模型是 Leader 联邦：每个节点的 DeepSeek Harness 根 Agent 是一个 Leader，Leader 自己管理本机 subagent 或 Agent Team；跨节点只发生 Leader-to-Leader 通信和任务委派。
@@ -59,6 +61,13 @@ pixi global install \
   --channel https://downloads.example.com/agent-mesh \
   --channel conda-forge \
   agent-mesh
+```
+
+GitHub Actions 在 tag `v<recipe-version>` 上用标准免费 runner 并行构建 `linux-64` 与 `osx-arm64`，临时 artifact 仅保留 3 天，长期文件和 `SHA256SUMS` 发布到 GitHub Release。也可以在 Actions 页面手动运行 `Release Conda packages`：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 第一台 Leader 在 WireGuard 地址上创建网络并启动；终端会打印 Harness Web URL 和一枚 15 分钟、单次使用的 `mesh1:` 邀请码：
