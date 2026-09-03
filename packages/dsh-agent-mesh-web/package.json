@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-mesh-web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness Web status and topology UI for agent-mesh",
   "type": "module",
   "main": "index.js",

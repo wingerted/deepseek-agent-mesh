@@ -15,6 +15,7 @@ install -m 0644 LICENSE "$PREFIX/libexec/agent-mesh/LICENSE"
 runtime="$PREFIX/libexec/agent-mesh"
 npm install --prefix "$runtime" --omit=dev --no-audit --no-fund \
   "@deepseek-ai/dsh@0.1.2-alpha.4"
+node tooling/patch-harness-runtime.mjs "$runtime"
 
 core="$runtime/plugins/dsh-agent-mesh"
 install -d "$core/lib"
@@ -31,3 +32,5 @@ install -m 0644 packages/dsh-agent-mesh-web/lib/client.js "$web/lib/client.js"
 install -m 0644 packages/dsh-agent-mesh-web/package.json "$web/package.json"
 install -m 0644 packages/dsh-agent-mesh-web/cordis.patch.yml "$web/cordis.patch.yml"
 install -m 0644 packages/dsh-agent-mesh-web/README.md "$web/README.md"
+
+node tooling/test-conda-runtime.mjs "$PREFIX"
