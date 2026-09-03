@@ -14,7 +14,7 @@ private_networks = []
 
 # These are operator declarations used by routing, not speed-test results.
 [capacity]
-ingress_mbps = 1000
+ingress_mbps = 100
 egress_mbps = 100
 region = "local"
 zone = "default"

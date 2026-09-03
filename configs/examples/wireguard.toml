@@ -17,7 +17,7 @@ private_networks = ["wireguard"]
 
 # Replace these declarations after an iperf3 test. They are not observations.
 [capacity]
-ingress_mbps = 1000
+ingress_mbps = 100
 egress_mbps = 100
 region = "local"
 zone = "default"

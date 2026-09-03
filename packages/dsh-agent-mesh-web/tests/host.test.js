@@ -4,7 +4,11 @@ import { apply, buildSnapshot } from '../index.js'
 
 function context(overrides = {}) {
   const status = {
-    peer_id: 'local-peer', name: 'local-node', network_id: 'mesh-a', connected_peers: 1,
+    peer_id: 'local-peer', name: 'local-node', network_id: 'mesh-a', connected_peers: 1, rendezvous_server: true,
+    membership: {
+      network_id: 'mesh-a', root_peer_id: 'local-peer',
+      certificate: { peer_id: 'local-peer', expires_at: 1_830_297_600 },
+    },
     objects: 2, listen_addresses: ['/ip4/127.0.0.1/tcp/41001'],
   }
   const peers = [{
@@ -44,6 +48,11 @@ test('buildSnapshot returns bounded browser-safe node, leader and topology metad
   assert.equal(snapshot.version, 1)
   assert.equal(snapshot.node.peer_id, 'local-peer')
   assert.equal(snapshot.node.leader.max_parallel_tasks, 2)
+  assert.deepEqual(snapshot.node.membership, {
+    enrolled: true, role: 'founder', root_peer_id: 'local-peer',
+    certificate_expires_at: '2028-01-01T00:00:00.000Z',
+  })
+  assert.equal(snapshot.node.rendezvous_server, true)
   assert.equal(snapshot.leader.session_id, 'session-1')
   assert.equal(snapshot.peers[0].route, 'DirectPrivate')
   assert.equal(snapshot.peers[0].inventory.total_bytes, 400)

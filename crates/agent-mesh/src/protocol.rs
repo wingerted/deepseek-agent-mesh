@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     envelope::Envelope,
+    membership::MembershipCertificate,
     model::{AgentAdvertisement, ObjectSummary},
 };
 
@@ -20,7 +21,12 @@ pub enum MeshRequest {
         request_source_delete: bool,
     },
     DeliverEnvelope {
-        envelope: Envelope,
+        envelope: Box<Envelope>,
+        #[serde(default)]
+        membership: Option<MembershipCertificate>,
+    },
+    JoinNetwork {
+        token: String,
     },
 }
 
@@ -40,6 +46,9 @@ pub enum MeshResponse {
     },
     EnvelopeAccepted {
         id: uuid::Uuid,
+    },
+    NetworkJoined {
+        certificate: MembershipCertificate,
     },
     Error {
         message: String,

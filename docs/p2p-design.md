@@ -21,8 +21,9 @@
 数据协议       GetInventory / GetChunk / TransferReceipt / DeliverEnvelope（CBOR）
 内容发现       Kademlia: (network_id, object_sha256) -> provider PeerId
 成员传播       Gossipsub: 有 TTL 的 AgentAdvertisement
-邻居发现       mDNS（局域网） + bootstrap multiaddr（跨网入口）
+邻居发现       mDNS（局域网） + bootstrap + libp2p Rendezvous
 地址交换       Identify；学到的地址显式加入 Kademlia
+成员准入       根签名一次性邀请 + Peer ID 绑定成员证书
 安全传输       Ed25519 PeerId + Noise + TCP/Yamux 或 QUIC
 ```
 
@@ -51,18 +52,22 @@ relay
 - 所有浮点声明必须有限，负价格、非法负载和非法带宽会被拒绝。
 - `private_networks` 是非秘密标签。只有连接的实际远端地址属于私网/回环，并且标签相交，才判定为免费私网路径。
 
-签名只能证明“这条声明来自这个 Peer ID 且传输中未被修改”，不能证明节点真的有相应带宽、存储或低价出口，也不能防止 Sybil 身份。Agent 消息与任务当前采用显式 Peer allowlist；受控部署仍应进一步把 Peer ID 绑定到组织证书。
+签名只能证明“这条声明来自这个 Peer ID 且传输中未被修改”，不能证明节点真的有相应带宽、存储或低价出口。v1 以创始节点根身份签发成员证书来限制 Sybil 自由入网，Agent 消息与任务要求有效成员证书；静态 Peer allowlist 是兼容和补充路径。单根治理仍不能抵御根密钥失窃，也没有成员吊销能力。
 
 daemon 是 Peer ID 和 Swarm 的唯一所有者。本机 CLI 与 Harness 插件通过 `control.json` 中的回环地址和随机令牌调用它；该文件权限为 `0600`。这条本地 RPC 不暴露到局域网或公网。
 
 ## 4. 加入与发现流程
 
 ```text
-启动
-  ├─ 加载稳定 Peer ID
-  ├─ TCP/QUIC 监听
-  ├─ mDNS 寻找同一局域网节点
-  └─ 连接一个或多个 bootstrap 地址
+创始节点 dsh-mesh up --new
+  └─ 生成根成员证书和一枚签名、限时、单次邀请码
+          ↓
+新节点 dsh-mesh join mesh1:...
+  ├─ 离线验证邀请码签名、根 Peer ID、地址与过期时间
+  ├─ 连接邀请码内的 bootstrap
+  └─ 通过 Noise 认证连接提交 token，领取绑定本机 Peer ID 的成员证书
+          ↓
+向 agent-mesh/<network_id> rendezvous namespace 登记并发现成员
           ↓
 Identify 交换监听地址，并写入 Kademlia 路由表
           ↓
@@ -73,7 +78,7 @@ Gossipsub 发布/接收短期资源声明
 消费者按对象 key 查 provider，并向候选点对点查询最新声明和库存
 ```
 
-Bootstrap 是普通成员而不是权威注册中心，可以配置多个并由任何组织运行。失去全部 bootstrap 后，已经互联的网络仍可工作；一个完全孤立的新节点仍需要至少一个入口或同网段 mDNS 邻居。
+每个节点都是普通成员，同时运行 Rendezvous server 和 client；不需要第三方服务。邀请码中的创始节点地址是第一次连接的 hint，Rendezvous 返回的签名 PeerRecord 也只是地址 hint，授权仍由成员证书决定。失去全部已知入口后，已经互联的网络仍可工作；一个完全孤立或全冷启动的新节点仍需要至少一个可达成员或同网段 mDNS 邻居。
 
 Kademlia 记录可能滞后，因此“DHT 说某节点有文件”不是最终事实。消费者还会请求实时 inventory；传输中每块及整对象都会重新校验。
 
@@ -132,7 +137,7 @@ estimated_seconds = B × 8 / (effective_mbps × 1,000,000)
 
 ## 6.1 Agent 消息与任务
 
-`DeliverEnvelope` 承载 `message`、`task`、`task_cancel`、`task_progress` 和 `task_result`。信封带 UUID、发送/接收 Peer ID、网络、TTL、关联任务 UUID 与 JSON payload。接收端核对实际连接 Peer ID 和 allowlist，原子写入 inbox 后才 ACK；重复 UUID 不会重复落盘。
+`DeliverEnvelope` 承载 `message`、`task`、`task_cancel`、`task_progress` 和 `task_result`。信封带 UUID、发送/接收 Peer ID、网络、TTL、关联任务 UUID、JSON payload 和发送方成员证书。接收端核对实际连接 Peer ID、根签名、network binding、证书有效期（或兼容 allowlist），原子写入 inbox 后才 ACK；重复 UUID 不会重复落盘。
 
 Harness 采用 Leader 联邦而不是跨节点 Agent Team。每个节点只声明一个 `dsh-leader/1` 入口，teammate 永远留在本地。绑定的 Leader 收到 task 后可用本机 subagent/Agent Team 处理；`MeshLeaderProvider` 在发送端只创建一个远端 `SubagentRun` 代理。取消和结果通过 correlation ID 对齐。默认跨节点 hop budget 为 1，经过一次 Leader 委派后归零，但不限制远端 Leader 的本地 Team 调度。
 
@@ -164,16 +169,17 @@ objects/<sha256> → delete-pending/<sha256>
 - 内容静默损坏：分块哈希和整对象内容寻址。
 - 过期资源状态长期参与计划：短 TTL。
 - 单方意外触发删除：双向开关、完整性回执和可恢复待删除区。
+- 未持有根签发证书的任意 Peer 向成员投递 Agent 消息或任务。
 
 当前不能抵御：
 
-- Sybil、恶意自报价格/带宽/负载、同一身份私钥被盗。
+- 根或成员私钥被盗、成员证书到期前的吊销、恶意自报价格/带宽/负载。
 - 未授权成员读取 inventory 或对象；`network_id` 不是 ACL。
 - 流量分析、恶意消耗带宽/连接/磁盘、DHT 污染和 eclipse 攻击。
 - 提供方看到明文内容；传输加密不等于端到端存储加密。
 - 自报价格与云厂商实际账单不一致。
 
-生产准入至少需要：组织 CA 或显式 Peer allowlist、每对象/命名空间 ACL、challenge-response 成员证明、速率与并发限制、磁盘配额、价格表签名及账单对账、审计事件、密钥轮换和撤销。敏感数据应客户端加密后再按密文哈希寻址。
+生产准入至少需要：成员吊销/续期、根轮换或多签治理、每对象/命名空间 ACL、速率与并发限制、磁盘配额、价格表签名及账单对账、审计事件。敏感数据应客户端加密后再按密文哈希寻址。
 
 ## 9. NAT 与 relay
 
@@ -205,9 +211,9 @@ P2P GetChunk
 
 ## 11. 演进顺序
 
-1. **当前 MVP**：稳定身份、声明、局域网/显式入口发现、Kademlia provider、分块校验、预算选路、可恢复删除。
+1. **当前 MVP**：稳定身份、签名邀请与成员证书、自托管 Rendezvous、Kademlia provider、分块校验、预算选路、可恢复删除。
 2. **可靠传输**：断点续传、并发窗口、EWMA 吞吐、provider 失败熔断、磁盘配额。
 3. **复杂网络**：AutoNAT、打洞、Circuit Relay v2、路径动态升级。
-4. **可信成员**：在现有 Peer allowlist 上增加组织证书、对象 ACL、声明签名策略、审计、信誉和 Sybil 防护。
+4. **可信成员**：成员吊销/续期、根轮换或多签、对象 ACL、声明签名策略、审计、信誉和 Sybil 防护。
 5. **资源适配**：US3/S3、本地目录、HTTP 源、带宽和存储 worker；统一 manifest。
 6. **结算与调度**：签名价格表、实际账单对账、多 provider 并行优化、租户预算账本。

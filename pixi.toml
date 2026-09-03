@@ -13,6 +13,7 @@ pnpm = "==11.7.0"
 git = ">=2.26"
 ripgrep = "*"
 jq = "*"
+rattler-build = "==0.75.0"
 
 [tasks]
 bootstrap = "pnpm install --frozen-lockfile"
@@ -23,8 +24,9 @@ build-plugins = "pnpm -r --if-present build"
 build = { depends-on = ["build-rust", "build-plugins"] }
 test-rust = "cargo test --workspace"
 test-plugins = "pnpm -r --if-present test"
+test-tooling = "node --test tooling/*.test.js"
 test-integration = { cmd = "bash scripts/smoke-two-nodes.sh target/debug/agent-mesh", depends-on = ["build-rust-debug"] }
-test = { depends-on = ["test-rust", "test-plugins", "test-integration"] }
+test = { depends-on = ["test-rust", "test-plugins", "test-tooling", "test-integration"] }
 fmt-check = "cargo fmt --all --check"
 clippy = "cargo clippy --workspace --all-targets -- -D warnings"
 check = { depends-on = ["fmt-check", "clippy", "test", "build-plugins"] }
@@ -33,3 +35,5 @@ test-packed = { cmd = "node tooling/test-packed-profile.mjs", depends-on = ["pac
 harness-install = "node tooling/harness-profile.mjs install"
 harness-dump = "node tooling/harness-profile.mjs dump"
 harness-web = "node tooling/harness-profile.mjs web"
+dsh-mesh = "node tooling/dsh-mesh.mjs"
+package-conda = "rattler-build build --recipe packaging/conda --output-dir artifacts/conda"

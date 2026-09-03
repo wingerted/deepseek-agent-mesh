@@ -13,14 +13,16 @@
 
 安装：
 
+生产节点推荐直接安装 monorepo 生成的 Conda 包，然后使用 `dsh-mesh up --new` 或 `dsh-mesh join`；它会自动安装核心与 Web 插件。以下命令仅用于源码开发：
+
 ```bash
-pixi run pnpm --dir ../deepseek-harness dsh plugin --profile web add /Users/wingerted/Developer/agent-mesh/packages/dsh-agent-mesh
+pixi run pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD/packages/dsh-agent-mesh"
 ```
 
 如果该 profile 运行 Harness Web，同时安装配套的只读状态/拓扑页：
 
 ```bash
-pixi run pnpm --dir ../deepseek-harness dsh plugin --profile web add /Users/wingerted/Developer/agent-mesh/packages/dsh-agent-mesh-web
+pixi run pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD/packages/dsh-agent-mesh-web"
 ```
 
 然后在 **设置 → 插件 → Mesh 网络** 查看本机、Leader、Peer meta 和当前最佳路由拓扑。
@@ -68,4 +70,4 @@ Leader 发起委派时调用：
 
 若要修改带宽、价格或轮询间隔，在 profile 的 `cordis.patch.yml` 中覆盖对应整行配置。Harness patch 替换整个 `config`，不会深度合并，因此应保留仍需使用的字段。
 
-安全默认值：空 allowlist 拒绝远端消息与任务；未绑定 Leader 时不执行远端任务；teammate 的跨节点工具调用会被拒绝。只有受控开发网络才应设置 `AGENT_MESH_ALLOW_ALL_PEERS=1`。
+安全默认值：`dsh-mesh` 组网时要求创始节点签发的成员证书；没有成员证书的兼容模式中，空 allowlist 拒绝远端消息与任务。未绑定 Leader 时不执行远端任务；teammate 的跨节点工具调用会被拒绝。只有受控开发网络才应设置 `AGENT_MESH_ALLOW_ALL_PEERS=1`。

@@ -12,7 +12,7 @@ use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, gossipsub, identify, identity, kad,
     mdns,
     multiaddr::Protocol,
-    noise, ping,
+    noise, ping, rendezvous,
     request_response::{self, OutboundRequestId, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux,
@@ -32,13 +32,14 @@ use crate::{
     envelope::{Envelope, EnvelopeKind},
     ipc::{ControlFile, RpcRequest, RpcResponse},
     mailbox::Mailbox,
+    membership::{JoinTicket, MembershipManager},
     model::{ADVERTISEMENT_TTL_SECS, AgentAdvertisement, AgentCapabilities, ObjectSummary},
     planner::{Candidate, OptimizeFor, RouteKind, TransferPlan, choose_best},
     protocol::{MeshRequest, MeshResponse, chunk_response},
     store::ObjectStore,
 };
 
-const MESH_PROTOCOL: StreamProtocol = StreamProtocol::new("/agent-mesh/transfer/1");
+const MESH_PROTOCOL: StreamProtocol = StreamProtocol::new("/agent-mesh/transfer/2");
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -48,6 +49,8 @@ struct Behaviour {
     mdns: mdns::tokio::Behaviour,
     identify: identify::Behaviour,
     ping: ping::Behaviour,
+    rendezvous_client: rendezvous::client::Behaviour,
+    rendezvous_server: rendezvous::server::Behaviour,
 }
 
 pub struct NodeOptions {
@@ -61,6 +64,7 @@ pub struct NodeOptions {
     pub mailbox: Mailbox,
     pub allowed_peers: HashSet<PeerId>,
     pub allow_all_peers: bool,
+    pub membership: MembershipManager,
 }
 
 struct MeshNode {
@@ -73,6 +77,9 @@ struct MeshNode {
     mailbox: Mailbox,
     allowed_peers: HashSet<PeerId>,
     allow_all_peers: bool,
+    identity: identity::Keypair,
+    membership: MembershipManager,
+    rendezvous_namespace: rendezvous::Namespace,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +104,8 @@ impl MeshNode {
             .validate()
             .map_err(anyhow::Error::msg)?;
         let peer_id = options.keypair.public().to_peer_id();
+        let identity = options.keypair.clone();
+        let rendezvous_identity = options.keypair.clone();
         let mut swarm = SwarmBuilder::with_existing_identity(options.keypair)
             .with_tokio()
             .with_tcp(
@@ -130,6 +139,12 @@ impl MeshNode {
                         key.public(),
                     )),
                     ping: ping::Behaviour::default(),
+                    rendezvous_client: rendezvous::client::Behaviour::new(
+                        rendezvous_identity.clone(),
+                    ),
+                    rendezvous_server: rendezvous::server::Behaviour::new(
+                        rendezvous::server::Config::default(),
+                    ),
                 })
             })?
             .with_swarm_config(|config| {
@@ -145,6 +160,8 @@ impl MeshNode {
         }
         let topic =
             gossipsub::IdentTopic::new(format!("agent-mesh/{}/agents/v1", options.network_id));
+        let rendezvous_namespace =
+            rendezvous::Namespace::new(format!("agent-mesh/{}", options.network_id))?;
         swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
         for address in &options.listen {
             swarm.listen_on(address.clone())?;
@@ -153,6 +170,9 @@ impl MeshNode {
         let mut bootstrap_peers = HashSet::new();
         for address in &options.bootstrap {
             let peer = peer_from_multiaddr(address)?;
+            if peer == peer_id {
+                continue;
+            }
             bootstrap_peers.insert(peer);
             swarm
                 .behaviour_mut()
@@ -183,6 +203,9 @@ impl MeshNode {
             mailbox: options.mailbox,
             allowed_peers: options.allowed_peers,
             allow_all_peers: options.allow_all_peers,
+            identity,
+            membership: options.membership,
+            rendezvous_namespace,
         })
     }
 
@@ -225,6 +248,61 @@ impl MeshNode {
             .kademlia
             .add_address(&peer, strip_peer(address.clone()));
         self.swarm.add_peer_address(peer, strip_peer(address));
+    }
+
+    fn rendezvous_connected(&mut self, peer: PeerId) {
+        self.swarm.behaviour_mut().rendezvous_client.discover(
+            Some(self.rendezvous_namespace.clone()),
+            None,
+            Some(256),
+            peer,
+        );
+        if let Err(error) = self.swarm.behaviour_mut().rendezvous_client.register(
+            self.rendezvous_namespace.clone(),
+            peer,
+            None,
+        ) {
+            tracing::debug!(%peer, %error, "rendezvous registration deferred");
+        }
+    }
+
+    fn register_with_connected_rendezvous(&mut self) {
+        let peers: Vec<_> = self.swarm.connected_peers().copied().collect();
+        for peer in peers {
+            let _ = self.swarm.behaviour_mut().rendezvous_client.register(
+                self.rendezvous_namespace.clone(),
+                peer,
+                None,
+            );
+        }
+    }
+
+    fn handle_rendezvous_client(&mut self, event: rendezvous::client::Event) {
+        match event {
+            rendezvous::client::Event::Discovered { registrations, .. } => {
+                for registration in registrations {
+                    let peer = registration.record.peer_id();
+                    if peer == *self.swarm.local_peer_id() {
+                        continue;
+                    }
+                    for address in registration.record.addresses() {
+                        self.add_peer_address(peer, address.clone());
+                    }
+                    let _ = self.swarm.dial(peer);
+                }
+            }
+            rendezvous::client::Event::DiscoverFailed {
+                rendezvous_node,
+                error,
+                ..
+            } => tracing::debug!(%rendezvous_node, ?error, "rendezvous discovery failed"),
+            rendezvous::client::Event::RegisterFailed {
+                rendezvous_node,
+                error,
+                ..
+            } => tracing::debug!(%rendezvous_node, ?error, "rendezvous registration failed"),
+            _ => {}
+        }
     }
 
     fn provider_key(&self, object_id: &str) -> kad::RecordKey {
@@ -292,8 +370,13 @@ impl MeshNode {
                 tracing::info!(%peer, %object_id, valid, delete_pending, "transfer receipt");
                 MeshResponse::ReceiptAccepted { delete_pending }
             }
-            MeshRequest::DeliverEnvelope { envelope } => {
-                let authorized = self.allow_all_peers || self.allowed_peers.contains(&peer);
+            MeshRequest::DeliverEnvelope {
+                envelope,
+                membership,
+            } => {
+                let authorized = self.allow_all_peers
+                    || self.allowed_peers.contains(&peer)
+                    || self.membership.authorizes(peer, membership.as_ref());
                 if !authorized {
                     MeshResponse::Error {
                         message: format!("peer {peer} is not allowed"),
@@ -313,6 +396,14 @@ impl MeshNode {
                             message: error.to_string(),
                         },
                     }
+                }
+            }
+            MeshRequest::JoinNetwork { token } => {
+                match self.membership.admit(&self.identity, &token, peer) {
+                    Ok(certificate) => MeshResponse::NetworkJoined { certificate },
+                    Err(error) => MeshResponse::Error {
+                        message: error.to_string(),
+                    },
                 }
             }
         };
@@ -356,17 +447,20 @@ pub async fn serve(options: NodeOptions, allow_source_delete: bool) -> Result<()
             _ = advertise.tick() => node.publish_advertisement(),
             event = node.swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
+                    node.swarm.add_external_address(address.clone());
                     let full = address.with(Protocol::P2p(*node.swarm.local_peer_id()));
                     let text = full.to_string();
                     if !node.advertisement.listen_addresses.contains(&text) {
                         node.advertisement.listen_addresses.push(text.clone());
                     }
                     node.publish_advertisement();
+                    node.register_with_connected_rendezvous();
                     println!("{}", serde_json::json!({"event":"listening","address":text}));
                 }
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                     node.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                     node.publish_advertisement();
+                    node.rendezvous_connected(peer_id);
                     for object in &inventory {
                         let provider_key = node.provider_key(&object.object_id);
                         let _ = node
@@ -408,6 +502,9 @@ pub async fn serve(options: NodeOptions, allow_source_delete: bool) -> Result<()
                         println!("{}", serde_json::json!({"event":"member","advertisement":advertisement}));
                     }
                 }
+                SwarmEvent::Behaviour(BehaviourEvent::RendezvousClient(event)) => {
+                    node.handle_rendezvous_client(event);
+                }
                 _ => {}
             }
         }
@@ -434,8 +531,10 @@ pub async fn discover(options: NodeOptions, seconds: u64) -> Result<Vec<PeerSnap
         };
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
+                node.swarm.add_external_address(address.clone());
                 let full = address.with(Protocol::P2p(*node.swarm.local_peer_id()));
                 node.advertisement.listen_addresses.push(full.to_string());
+                node.register_with_connected_rendezvous();
             }
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
@@ -446,6 +545,7 @@ pub async fn discover(options: NodeOptions, seconds: u64) -> Result<Vec<PeerSnap
                     .add_explicit_peer(&peer_id);
                 route.insert(peer_id, classify_route(&endpoint));
                 node.request_peer_snapshot(peer_id, &mut pending);
+                node.rendezvous_connected(peer_id);
             }
             SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                 for (peer, address) in peers {
@@ -513,6 +613,9 @@ pub async fn discover(options: NodeOptions, seconds: u64) -> Result<Vec<PeerSnap
                     node.handle_inbound_request(peer, request, channel, false);
                 }
             },
+            SwarmEvent::Behaviour(BehaviourEvent::RendezvousClient(event)) => {
+                node.handle_rendezvous_client(event);
+            }
             _ => {}
         }
     }
@@ -531,6 +634,34 @@ pub async fn discover(options: NodeOptions, seconds: u64) -> Result<Vec<PeerSnap
         })
         .collect();
     Ok(snapshots)
+}
+
+pub async fn join(options: NodeOptions, ticket: JoinTicket) -> Result<Value> {
+    ticket.verify()?;
+    let issuer = ticket.issuer()?;
+    let mut node = MeshNode::new(options).await?;
+    let response = request_once(
+        &mut node,
+        issuer,
+        MeshRequest::JoinNetwork {
+            token: ticket.token.clone(),
+        },
+    )
+    .await?;
+    match response {
+        MeshResponse::NetworkJoined { certificate } => {
+            node.membership.accept(&ticket, certificate)?;
+            Ok(json!({
+                "joined": true,
+                "network_id": ticket.network_id,
+                "peer_id": node.advertisement.peer_id,
+                "root_peer_id": ticket.issuer_peer_id,
+                "bootstrap": ticket.bootstrap,
+            }))
+        }
+        MeshResponse::Error { message } => bail!("join rejected: {message}"),
+        _ => bail!("inviter returned an invalid join response"),
+    }
 }
 
 async fn get_with_node(
@@ -678,6 +809,7 @@ async fn discover_with_node(
                 route.insert(peer_id, classify_route(&endpoint));
                 node.request_peer_snapshot(peer_id, &mut pending);
                 node.publish_advertisement();
+                node.rendezvous_connected(peer_id);
             }
             SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                 for (peer, address) in peers {
@@ -763,8 +895,13 @@ async fn discover_with_node(
                 rtt.insert(peer, duration.as_secs_f64() * 1000.0);
             }
             SwarmEvent::NewListenAddr { address, .. } => {
+                node.swarm.add_external_address(address.clone());
                 let full = address.with(Protocol::P2p(*node.swarm.local_peer_id()));
                 node.advertisement.listen_addresses.push(full.to_string());
+                node.register_with_connected_rendezvous();
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::RendezvousClient(event)) => {
+                node.handle_rendezvous_client(event);
             }
             _ => {}
         }
@@ -831,6 +968,15 @@ async fn request_once(
     timeout(Duration::from_secs(30), async {
         loop {
             match node.swarm.select_next_some().await {
+                SwarmEvent::NewListenAddr { address, .. } => {
+                    node.swarm.add_external_address(address);
+                }
+                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    node.rendezvous_connected(peer_id);
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::RendezvousClient(event)) => {
+                    node.handle_rendezvous_client(event);
+                }
                 SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
                     request_response::Event::Message {
                         peer: source,
@@ -1080,6 +1226,8 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                             "listen_addresses":node.advertisement.listen_addresses,
                             "connected_peers":node.swarm.connected_peers().count(),
                             "objects":node.store.inventory().unwrap_or_default().len(),
+                            "membership":node.membership.state(),
+                            "rendezvous_server":true,
                         });
                         let _ = command.reply.send(RpcResponse::success(result));
                     }
@@ -1092,6 +1240,22 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                             "observed_rtt_ms":rtts.get(peer).copied().unwrap_or(250.0),
                         })).collect();
                         let _ = command.reply.send(RpcResponse::success(json!(peers)));
+                    }
+                    "invite.create" => {
+                        let ttl_seconds = command.request.params.get("ttl_seconds")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(900);
+                        let response = node.membership.create_invite(
+                            &node.identity,
+                            node.advertisement.listen_addresses.clone(),
+                            ttl_seconds,
+                        ).and_then(|ticket| Ok(json!({
+                            "join_code":ticket.encode()?,
+                            "expires_at":ticket.expires_at,
+                            "network_id":ticket.network_id,
+                            "issuer_peer_id":ticket.issuer_peer_id,
+                        }))).map(RpcResponse::success).unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
                     }
                     "publish" => {
                         let path = command.request.params.get("path").and_then(Value::as_str);
@@ -1175,7 +1339,11 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                                 continue;
                             }
                         };
-                        if !(node.allow_all_peers || node.allowed_peers.contains(&peer)) {
+                        let membership = node.membership.certificate();
+                        if !(node.allow_all_peers
+                            || node.allowed_peers.contains(&peer)
+                            || membership.is_some())
+                        {
                             let _ = command.reply.send(RpcResponse::failure(format!("peer {peer} is not allowed")));
                             continue;
                         }
@@ -1190,7 +1358,10 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                         );
                         let envelope_id = envelope.id;
                         let request_id = node.swarm.behaviour_mut().request_response
-                            .send_request(&peer, MeshRequest::DeliverEnvelope { envelope });
+                            .send_request(&peer, MeshRequest::DeliverEnvelope {
+                                envelope: Box::new(envelope),
+                                membership,
+                            });
                         pending_envelopes.insert(request_id, PendingEnvelope {
                             envelope_id,
                             deadline: Instant::now() + Duration::from_secs(30),
@@ -1204,18 +1375,21 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
             },
             event = node.swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
+                    node.swarm.add_external_address(address.clone());
                     let full = address.with(Protocol::P2p(*node.swarm.local_peer_id()));
                     let text = full.to_string();
                     if !node.advertisement.listen_addresses.contains(&text) {
                         node.advertisement.listen_addresses.push(text);
                         node.publish_advertisement();
                     }
+                    node.register_with_connected_rendezvous();
                 }
                 SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                     node.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                     routes.insert(peer_id, classify_route(&endpoint));
                     node.request_peer_snapshot(peer_id, &mut pending_snapshot);
                     node.publish_advertisement();
+                    node.rendezvous_connected(peer_id);
                     for object in node.store.inventory().unwrap_or_default() {
                         let key = node.provider_key(&object.object_id);
                         let _ = node.swarm.behaviour_mut().kademlia.start_providing(key);
@@ -1280,6 +1454,9 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                     if let Some(pending) = pending_envelopes.remove(&request_id) {
                         let _ = pending.reply.send(RpcResponse::failure(error));
                     }
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::RendezvousClient(event)) => {
+                    node.handle_rendezvous_client(event);
                 }
                 _ => {}
             }

@@ -54,8 +54,11 @@ export async function buildSnapshot(ctx, config = {}, signal) {
 function normalizeNode(status, configured) {
   const value = object(status)
   const meta = object(configured)
+  const membership = object(value.membership)
+  const certificate = object(membership.certificate)
+  const peerId = text(value.peer_id)
   return {
-    peer_id: text(value.peer_id),
+    peer_id: peerId,
     name: text(value.name),
     network_id: text(value.network_id),
     connected_peers: integer(value.connected_peers),
@@ -75,6 +78,13 @@ function normalizeNode(status, configured) {
     idle_price_per_gib: number(meta.idle_price_per_gib),
     busy_price_per_gib: number(meta.busy_price_per_gib),
     allow_source_delete: meta.allow_source_delete === true,
+    rendezvous_server: value.rendezvous_server === true,
+    membership: {
+      enrolled: text(membership.network_id) !== '' && text(certificate.peer_id) === peerId,
+      role: text(membership.root_peer_id) === peerId ? 'founder' : 'member',
+      root_peer_id: text(membership.root_peer_id),
+      certificate_expires_at: epochTimestamp(certificate.expires_at),
+    },
     leader: {
       protocols: texts(meta.leader_protocols, 16),
       roles: texts(meta.leader_roles, 32),
@@ -196,6 +206,12 @@ function positiveInteger(value, fallback) {
 function timestamp(value) {
   const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined
+}
+
+function epochTimestamp(value) {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return undefined
+  return new Date(parsed * 1000).toISOString()
 }
 
 function route(value) {

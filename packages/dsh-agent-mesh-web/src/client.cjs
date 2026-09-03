@@ -11,7 +11,7 @@ module.exports = function define(require) {
     bound: '已绑定', unbound: '未绑定', live: '会话存活', stale: '会话不可用', peers: '远端节点',
     objects: '对象', topology: '网络拓扑', topologyHelp: '连线表示本机到已发现节点的当前最佳路由。',
     local: '本机', directPrivate: '私网直连', directPublic: '公网直连', relayed: '中继', unknown: '未知路由',
-    localMeta: '本机信息', leaderMeta: 'Leader 能力', peerMeta: '节点信息', noPeers: '尚未发现其他节点。配置 bootstrap 或等待成员广播后，这里会自动出现。',
+    localMeta: '本机信息', leaderMeta: 'Leader 能力', peerMeta: '节点信息', noPeers: '尚未发现其他节点。加入网络或等待 rendezvous 发现后，这里会自动出现。',
     allowlistWarning: '当前节点未允许任何远端 Peer；除非配置 allowAllPeers，否则只能看到节点，不能接受其传输或任务。',
     peerId: 'Peer ID', name: '名称', network: '网络', mode: '运行模式', region: '区域', zone: '可用区',
     route: '路由', rtt: 'RTT', load: '负载', addresses: '地址', listen: '监听地址', bootstrap: 'Bootstrap',
@@ -21,6 +21,7 @@ module.exports = function define(require) {
     team: '本地 Agent Team', enabled: '启用', disabled: '禁用', parallel: '最大并行任务', session: '会话',
     status: '状态', idle: '空闲', running: '执行中', sourceDelete: '源文件删除', expires: '广告过期时间',
     yes: '是', no: '否', none: '无', nodeCount: '节点数', edgeCount: '连接数',
+    rendezvous: 'Rendezvous 服务', membership: '成员身份', signedMembership: '签名成员证书', founder: '创始节点', member: '成员节点', membershipRoot: '成员根 Peer', certificateExpires: '成员证书过期',
   }
 
   const en = {
@@ -31,7 +32,7 @@ module.exports = function define(require) {
     bound: 'Bound', unbound: 'Unbound', live: 'Session live', stale: 'Session unavailable', peers: 'Remote nodes',
     objects: 'Objects', topology: 'Network topology', topologyHelp: 'Edges show the current best route from this node to each discovered peer.',
     local: 'Local', directPrivate: 'Private direct', directPublic: 'Public direct', relayed: 'Relayed', unknown: 'Unknown route',
-    localMeta: 'Local metadata', leaderMeta: 'Leader capability', peerMeta: 'Peer metadata', noPeers: 'No peers discovered yet. Configure a bootstrap address or wait for member advertisements.',
+    localMeta: 'Local metadata', leaderMeta: 'Leader capability', peerMeta: 'Peer metadata', noPeers: 'No peers discovered yet. Join a network or wait for rendezvous discovery.',
     allowlistWarning: 'No remote peer is allowed. Unless allowAllPeers is enabled, peers can be discovered but cannot submit transfers or tasks.',
     peerId: 'Peer ID', name: 'Name', network: 'Network', mode: 'Mode', region: 'Region', zone: 'Zone',
     route: 'Route', rtt: 'RTT', load: 'Load', addresses: 'Addresses', listen: 'Listen addresses', bootstrap: 'Bootstrap',
@@ -41,6 +42,7 @@ module.exports = function define(require) {
     team: 'Local Agent Team', enabled: 'Enabled', disabled: 'Disabled', parallel: 'Max parallel tasks', session: 'Session',
     status: 'Status', idle: 'Idle', running: 'Running', sourceDelete: 'Source deletion', expires: 'Advertisement expires',
     yes: 'Yes', no: 'No', none: 'None', nodeCount: 'Nodes', edgeCount: 'Connections',
+    rendezvous: 'Rendezvous service', membership: 'Membership', signedMembership: 'Signed membership certificate', founder: 'Founder node', member: 'Member node', membershipRoot: 'Membership root peer', certificateExpires: 'Membership certificate expires',
   }
 
   const CSS = `
@@ -131,12 +133,14 @@ module.exports = function define(require) {
 
   function LocalMetadata({ snapshot, t }) {
     const node = snapshot.node; const leader = snapshot.leader
-    const policy = node.allow_all_peers ? t('allowAll') : node.allow_peers.length > 0 ? `${t('allowListed')} (${node.allow_peers.length})` : t('allowNone')
+    const policy = node.membership.enrolled ? t('signedMembership') : node.allow_all_peers ? t('allowAll') : node.allow_peers.length > 0 ? `${t('allowListed')} (${node.allow_peers.length})` : t('allowNone')
     return h('div', { className: 'am-cards am-local-cards' },
       h('section', { className: 'am-panel' }, h('h3', { className: 'am-section-title' }, t('localMeta')), h(Facts, { rows: [
         [t('name'), node.name], [t('peerId'), node.peer_id, true], [t('network'), node.network_id], [t('mode'), node.mode],
         [t('region'), node.region], [t('zone'), node.zone], [t('listen'), list(node.listen_addresses, t), true],
         [t('bootstrap'), list(node.bootstrap_addresses, t), true], [t('allowPolicy'), policy], [t('privateNetworks'), list(node.private_networks, t)],
+        [t('rendezvous'), yesNo(node.rendezvous_server, t)], [t('membership'), node.membership.enrolled ? t(node.membership.role) : t('none')],
+        [t('membershipRoot'), node.membership.root_peer_id, true], [t('certificateExpires'), formatTime(node.membership.certificate_expires_at)],
         [t('bandwidth'), `${formatNumber(node.ingress_mbps)} / ${formatNumber(node.egress_mbps)} Mbps`],
         [t('pricing'), `${formatNumber(node.idle_price_per_gib)} / ${formatNumber(node.busy_price_per_gib)}`], [t('sourceDelete'), yesNo(node.allow_source_delete, t)],
       ] })),
@@ -174,7 +178,7 @@ module.exports = function define(require) {
         h(SummaryCard, { label: t('leader'), value: t(leader.bound ? 'bound' : 'unbound'), note: t(leader.live ? 'live' : 'stale'), live: leader.bound && leader.live }),
         h(SummaryCard, { label: t('peers'), value: String(node.connected_peers), note: `${snapshot.topology.edge_count} ${t('edgeCount')}` }),
         h(SummaryCard, { label: t('objects'), value: String(node.object_count), note: `${snapshot.peers.reduce((sum, peer) => sum + peer.inventory.object_count, 0)} ${t('peers')}` })),
-      !node.allow_all_peers && node.allow_peers.length === 0 ? h('div', { className: 'am-alert', role: 'status' }, t('allowlistWarning')) : null,
+      !node.membership.enrolled && !node.allow_all_peers && node.allow_peers.length === 0 ? h('div', { className: 'am-alert', role: 'status' }, t('allowlistWarning')) : null,
       h(Topology, { snapshot, t }), h(LocalMetadata, { snapshot, t }),
       h('section', { className: 'am-panel', 'aria-labelledby': 'am-peer-title' }, h('div', { className: 'am-section-head' }, h('h3', { id: 'am-peer-title', className: 'am-section-title' }, t('peerMeta')), h('span', { className: 'am-muted' }, String(snapshot.peers.length))),
         snapshot.peers.length === 0 ? h('div', { className: 'am-empty' }, t('noPeers')) : h('div', { className: 'am-peer-list' }, snapshot.peers.map(peer => h(PeerCard, { key: peer.peer_id, peer, t }))))

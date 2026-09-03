@@ -2,6 +2,7 @@ mod envelope;
 mod identity;
 mod ipc;
 mod mailbox;
+mod membership;
 mod model;
 mod network;
 mod planner;
@@ -20,6 +21,7 @@ use envelope::EnvelopeKind;
 use libp2p::Multiaddr;
 use libp2p::PeerId;
 use mailbox::Mailbox;
+use membership::{JoinTicket, MembershipManager};
 use model::{AgentCapabilities, LeaderCapabilities};
 use network::NodeOptions;
 use planner::OptimizeFor;
@@ -49,8 +51,8 @@ struct Cli {
     name: String,
 
     /// Discovery namespace. This is not an authentication boundary.
-    #[arg(long, default_value = "default", global = true)]
-    network_id: String,
+    #[arg(long, global = true)]
+    network_id: Option<String>,
 
     #[arg(long, global = true)]
     listen: Vec<Multiaddr>,
@@ -83,9 +85,11 @@ struct Cli {
     #[arg(long, default_value_t = 1_000_000_000_000_u64, global = true)]
     storage_free_bytes: u64,
 
-    #[arg(long, default_value_t = 1000.0, global = true)]
+    /// Operator-declared capacity hint; no speed test is run automatically.
+    #[arg(long, default_value_t = 100.0, global = true)]
     ingress_mbps: f64,
 
+    /// Operator-declared capacity hint; no speed test is run automatically.
     #[arg(long, default_value_t = 100.0, global = true)]
     egress_mbps: f64,
 
@@ -137,6 +141,15 @@ struct Cli {
 enum Command {
     /// Print this agent's stable peer ID.
     Id,
+
+    /// Create a short-lived, single-use code for joining this running network.
+    Invite {
+        #[arg(long, default_value_t = 900)]
+        ttl_seconds: u64,
+    },
+
+    /// Redeem an invitation and persist this node's network membership.
+    Join { code: String },
 
     /// Run the persistent P2P node and authenticated local control service.
     Daemon {
@@ -304,6 +317,34 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let join_ticket = match &cli.command {
+        Command::Join { code } => Some(JoinTicket::decode(code)?),
+        _ => None,
+    };
+    let persisted_membership = MembershipManager::load(&cli.state_dir)?;
+    let network_id = join_ticket
+        .as_ref()
+        .map(|ticket| ticket.network_id.clone())
+        .or(cli.network_id)
+        .or_else(|| {
+            persisted_membership
+                .as_ref()
+                .map(|state| state.network_id.clone())
+        })
+        .unwrap_or_else(|| "default".into());
+    let mut bootstrap = cli.bootstrap;
+    if let Some(ticket) = &join_ticket {
+        bootstrap = ticket.bootstrap_addrs()?;
+    } else if bootstrap.is_empty()
+        && let Some(state) = &persisted_membership
+    {
+        bootstrap = state
+            .bootstrap
+            .iter()
+            .map(|address| address.parse())
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+
     let store = ObjectStore::open(&store_path)?;
     let mailbox = Mailbox::open(cli.state_dir.join("mailbox"))?;
     let leader_protocols = cli.leader_protocol.into_iter().collect::<BTreeSet<_>>();
@@ -337,21 +378,35 @@ async fn main() -> Result<()> {
         listen.push("/ip4/0.0.0.0/udp/0/quic-v1".parse()?);
     }
 
+    let membership =
+        MembershipManager::open(&cli.state_dir, &network_id, keypair.public().to_peer_id())?;
     let node_options = NodeOptions {
         keypair,
-        network_id: cli.network_id,
+        network_id,
         name: cli.name,
         listen,
-        bootstrap: cli.bootstrap,
+        bootstrap,
         capabilities,
         store,
         mailbox,
         allowed_peers: cli.allow_peer.into_iter().collect::<HashSet<_>>(),
         allow_all_peers: cli.allow_all_peers,
+        membership,
     };
 
     match cli.command {
         Command::Id => unreachable!(),
+        Command::Invite { ttl_seconds } => print_rpc(
+            ipc::call(
+                &cli.state_dir,
+                "invite.create",
+                serde_json::json!({"ttl_seconds":ttl_seconds}),
+            )
+            .await,
+        ),
+        Command::Join { .. } => {
+            print_rpc(network::join(node_options, join_ticket.expect("join ticket parsed")).await)
+        }
         Command::Daemon {
             control_listen,
             allow_source_delete,

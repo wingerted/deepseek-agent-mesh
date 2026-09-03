@@ -21,7 +21,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mesh_send',
-    description: 'Send a durable one-way message to an allowlisted Harness peer.',
+    description: 'Send a durable one-way message to an authorized Harness mesh member.',
     parameters: {
       peer_id: { type: 'string', required: true },
       text: { type: 'string', required: true },
@@ -41,7 +41,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mesh_task',
-    description: 'Ask an allowlisted remote Harness node to execute a prompt. Optionally wait for its correlated result.',
+    description: 'Ask an authorized remote Harness mesh member to execute a prompt. Optionally wait for its correlated result.',
     parameters: {
       peer_id: { type: 'string', required: true },
       prompt: { type: 'string', required: true },

@@ -14,7 +14,7 @@
         privateNetworks: !!js (process.env.AGENT_MESH_PRIVATE_NETWORKS ?? '').split(',').filter(Boolean)
         region: !!js process.env.AGENT_MESH_REGION ?? 'local'
         zone: !!js process.env.AGENT_MESH_ZONE ?? 'default'
-        ingressMbps: !!js Number(process.env.AGENT_MESH_INGRESS_MBPS ?? 1000)
+        ingressMbps: !!js Number(process.env.AGENT_MESH_INGRESS_MBPS ?? 100)
         egressMbps: !!js Number(process.env.AGENT_MESH_EGRESS_MBPS ?? 100)
         idlePricePerGib: !!js Number(process.env.AGENT_MESH_IDLE_PRICE_PER_GIB ?? 0)
         busyPricePerGib: !!js Number(process.env.AGENT_MESH_BUSY_PRICE_PER_GIB ?? 0)

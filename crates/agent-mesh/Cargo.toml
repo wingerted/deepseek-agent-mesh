@@ -23,6 +23,7 @@ libp2p = { version = "0.56", features = [
   "noise",
   "ping",
   "quic",
+  "rendezvous",
   "request-response",
   "serde",
   "tcp",

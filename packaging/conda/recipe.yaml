@@ -1,0 +1,43 @@
+context:
+  version: "0.1.0"
+  harness_version: "0.1.2-alpha.4"
+
+package:
+  name: agent-mesh
+  version: ${{ version }}
+
+source:
+  path: ../..
+
+build:
+  number: 2
+  script: build.sh
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ compiler('rust') }}
+    - nodejs 24.*
+    - pnpm 11.7.*
+  run:
+    - nodejs 24.*
+    - pnpm 11.7.*
+
+tests:
+  - script:
+      - agent-mesh --version
+      - dsh-mesh --help
+      - test -x "$PREFIX/libexec/agent-mesh/node_modules/.bin/dsh"
+      - test -f "$PREFIX/libexec/agent-mesh/plugins/dsh-agent-mesh/cordis.patch.yml"
+      - test -f "$PREFIX/libexec/agent-mesh/plugins/dsh-agent-mesh-web/lib/client.js"
+
+about:
+  homepage: https://github.com/agent-mesh/agent-mesh
+  repository: https://github.com/agent-mesh/agent-mesh
+  license: MIT
+  license_file: LICENSE
+  summary: Decentralized DeepSeek Harness Leader mesh
+  description: >-
+    A single install containing the Rust agent-mesh daemon, signed one-use join
+    protocol, self-hosted libp2p Rendezvous, DeepSeek Harness runtime, Leader
+    plugin, Web topology plugin, and the dsh-mesh launcher.

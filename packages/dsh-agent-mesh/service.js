@@ -20,7 +20,7 @@ export const Config = z.object({
   privateNetworks: z.array(z.string()).default([]),
   region: z.string().default('local'),
   zone: z.string().default('default'),
-  ingressMbps: z.number().default(1000),
+  ingressMbps: z.number().default(100),
   egressMbps: z.number().default(100),
   idlePricePerGib: z.number().default(0),
   busyPricePerGib: z.number().default(0),
