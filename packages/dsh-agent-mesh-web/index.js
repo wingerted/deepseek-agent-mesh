@@ -38,7 +38,7 @@ export async function buildSnapshot(ctx, config = {}, signal) {
     .filter(Boolean)
     .sort(comparePeers)
   return {
-    version: 1,
+    version: 2,
     captured_at: new Date().toISOString(),
     refresh_interval_ms: resolved.refreshIntervalMs,
     node: normalizeNode(status, ctx.mesh.view?.()),
@@ -141,11 +141,19 @@ function normalizePeer(peer) {
 
 function normalizeLeaderState(value) {
   const state = object(value)
+  const leaders = (Array.isArray(state.leaders) ? state.leaders : []).map((leader) => {
+    const item = object(leader)
+    return {
+      session_id: text(item.session_id),
+      live: item.live === true,
+      status: item.status === 'idle' || item.status === 'running' ? item.status : null,
+    }
+  }).filter(leader => leader.session_id !== '')
   return {
-    bound: state.bound === true,
-    live: state.live === true,
-    session_id: text(state.leader_session_id),
-    status: state.status === 'idle' || state.status === 'running' ? state.status : undefined,
+    bound: leaders.length > 0,
+    session_count: leaders.length,
+    live_count: leaders.filter(leader => leader.live).length,
+    sessions: leaders,
   }
 }
 

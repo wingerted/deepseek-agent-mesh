@@ -28,10 +28,10 @@ daemon 管理命令和日常操作位于同一 binary。`status/peers/invite/joi
 
 两个 bundle 位于 `packages/dsh-agent-mesh` 与 `packages/dsh-agent-mesh-web`，没有改动作为外部上游、且可能带有本机未提交修改的 Harness 仓库。
 
-- Service Definition/Provider：`MeshRuntime` 提供 `ctx.mesh.call()`；`MeshLeaderRuntime` 持久保存唯一 Leader Session；sidecar 可由 `ctx.subprocess` 托管或外接。
+- Service Definition/Provider：`MeshRuntime` 提供 `ctx.mesh.call()`；`MeshLeaderRuntime` 持久保存 Leader Session 集合；sidecar 可由 `ctx.subprocess` 托管或外接。
 - 原生委派：`MeshLeaderProvider` 注册到 `ctx.subagents`，`mesh_delegate` 返回远端 `SubagentRun` 代理并沿用 Harness 的 start/end、结果、取消与 dispose 语义。
-- Leader 边界：只有绑定的根 Agent 能调用跨节点工具。远端任务只进入该 Leader；它自行调用本机 subagent 或 Agent Team，teammate 对其他节点不可见。
-- Inbox activation：每次只激活一个 Leader 任务，用消息 ID 对齐真实 turn；`mesh_task_complete`/`mesh_task_fail` 可显式结算，否则取该 turn 的最后 assistant output。取消既能删除未 claim 的消息，也能中止已开始的 turn。
+- Leader 边界：只有绑定的根 Agent 能调用跨节点工具。节点可绑定多个 Leader Session；各 Leader 自行调用本机 subagent 或 Agent Team，teammate 对其他节点不可见。
+- Inbox activation：每个空闲 Leader Session 可激活一个任务，任务所有权、消息 ID 和 hop budget 按 Session 隔离；`mesh_task_complete`/`mesh_task_fail` 可显式结算，否则取对应 turn 的最后 assistant output。取消既能删除未 claim 的消息，也能中止已开始的 turn。
 - 路由：先按协议、role、workspace 过滤，再按私网路径、负载、RTT、出口价格评分。默认 hop budget 为 1，跨过一条 Leader 边后归零，本地 Team 调度不消耗该预算。
 - 生命周期：Harness 卸载插件时终止完整 daemon 进程树；真实 Loader 启停已经验证。
 

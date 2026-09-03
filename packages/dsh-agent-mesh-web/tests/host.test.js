@@ -37,7 +37,17 @@ function context(overrides = {}) {
         leader_max_parallel_tasks: 2, allow_source_delete: false,
       }),
     },
-    meshLeaders: { view: () => ({ bound: true, live: true, leader_session_id: 'session-1', status: 'idle' }) },
+    meshLeaders: { view: () => ({
+      bound: true,
+      leader_session_ids: ['session-1', 'session-2'],
+      live_count: 1,
+      leaders: [
+        { session_id: 'session-1', live: true, status: 'idle' },
+        { session_id: 'session-2', live: false, status: null },
+      ],
+      current_session_id: null,
+      current_session_is_leader: null,
+    }) },
     logger: { warn() {} },
     ...overrides,
   }
@@ -45,7 +55,7 @@ function context(overrides = {}) {
 
 test('buildSnapshot returns bounded browser-safe node, leader and topology metadata', async () => {
   const snapshot = await buildSnapshot(context(), { maxPeers: 10, refreshIntervalMs: 2000, requestTimeoutMs: 1000 })
-  assert.equal(snapshot.version, 1)
+  assert.equal(snapshot.version, 2)
   assert.equal(snapshot.node.peer_id, 'local-peer')
   assert.equal(snapshot.node.leader.max_parallel_tasks, 2)
   assert.deepEqual(snapshot.node.membership, {
@@ -53,7 +63,12 @@ test('buildSnapshot returns bounded browser-safe node, leader and topology metad
     certificate_expires_at: '2028-01-01T00:00:00.000Z',
   })
   assert.equal(snapshot.node.rendezvous_server, true)
-  assert.equal(snapshot.leader.session_id, 'session-1')
+  assert.equal(snapshot.leader.session_count, 2)
+  assert.equal(snapshot.leader.live_count, 1)
+  assert.deepEqual(snapshot.leader.sessions, [
+    { session_id: 'session-1', live: true, status: 'idle' },
+    { session_id: 'session-2', live: false, status: null },
+  ])
   assert.equal(snapshot.peers[0].route, 'DirectPrivate')
   assert.equal(snapshot.peers[0].inventory.total_bytes, 400)
   assert.deepEqual(snapshot.peers[0].capabilities.leader.roles, ['review'])

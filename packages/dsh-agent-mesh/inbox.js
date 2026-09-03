@@ -13,14 +13,14 @@ const PROTOCOL = 'dsh-leader/1'
 
 export function apply(ctx, config) {
   if (!config.enabled) return
-  let active
+  const active = new Map()
   let polling = false
 
   const finish = async (taskId, outcome) => {
-    if (active === undefined || active.envelope.id !== taskId) {
+    const entry = active.get(taskId)
+    if (entry === undefined) {
       throw new Error(`inbound Mesh Leader task ${taskId} is not active on this node`)
     }
-    const entry = active
     await ctx.mesh.call('send', {
       peer_id: entry.envelope.from_peer,
       kind: 'task_result',
@@ -35,9 +35,9 @@ export function apply(ctx, config) {
       ttl_seconds: 3600,
     })
     await ctx.mesh.call('inbox.ack', { id: entry.envelope.id })
-    if (active === entry) {
+    if (active.get(taskId) === entry) {
       ctx.meshLeaders.endInboundTask(taskId)
-      active = undefined
+      active.delete(taskId)
     }
     return { task_id: taskId, status: outcome.stop_reason }
   }
@@ -45,7 +45,7 @@ export function apply(ctx, config) {
   const disposeController = ctx.meshLeaders.registerTaskController({ complete: finish })
 
   const onEvent = (session, event) => {
-    const entry = active
+    const entry = [...active.values()].find(candidate => String(session.id) === String(candidate.leader.id))
     if (entry === undefined || String(session.id) !== String(entry.leader.id)) return
     if (event.type === 'user/message' && String(event.data.id) === String(entry.messageId)) {
       entry.started = true
@@ -76,12 +76,14 @@ export function apply(ctx, config) {
     try {
       const items = await ctx.mesh.call('inbox.list', { limit: 100 })
       await handleCancellations(ctx, items, active, finish)
-      if (active !== undefined) return
-      const leader = ctx.meshLeaders.leader()
-      if (leader === undefined || leader.status !== 'idle') return
+      const busyLeaderIds = new Set([...active.values()].map(entry => String(entry.leader.id)))
+      const leaders = ctx.meshLeaders.leaders()
+        .filter(leader => leader.status === 'idle' && !busyLeaderIds.has(String(leader.id)))
+      if (leaders.length === 0) return
 
       const message = items.find(item => item.kind === 'message')
       if (message !== undefined) {
+        const leader = leaders[0]
         leader.followup(createUserMessage({
           content: [{ type: 'text', text: `Mesh message from Leader ${message.from_peer}:\n\n${String(message.payload?.text ?? '')}` }],
           source: { kind: 'user' },
@@ -90,23 +92,25 @@ export function apply(ctx, config) {
         return
       }
 
-      const envelope = items.find(item => item.kind === 'task')
-      if (envelope === undefined) return
-      const userMessage = createUserMessage({ content: taskContent(envelope), source: { kind: 'user' } })
-      active = {
-        envelope,
-        leader,
-        messageId: userMessage.id,
-        started: false,
-        output: [],
-      }
-      ctx.meshLeaders.beginInboundTask(leader, envelope.id, envelope.payload?.hop_budget)
-      try {
-        leader.followup(userMessage)
-      } catch (error) {
-        ctx.meshLeaders.endInboundTask(envelope.id)
-        active = undefined
-        throw error
+      const tasks = items.filter(item => item.kind === 'task' && !active.has(item.id))
+      for (const [index, envelope] of tasks.slice(0, leaders.length).entries()) {
+        const leader = leaders[index]
+        const userMessage = createUserMessage({ content: taskContent(envelope), source: { kind: 'user' } })
+        active.set(envelope.id, {
+          envelope,
+          leader,
+          messageId: userMessage.id,
+          started: false,
+          output: [],
+        })
+        ctx.meshLeaders.beginInboundTask(leader, envelope.id, envelope.payload?.hop_budget)
+        try {
+          leader.followup(userMessage)
+        } catch (error) {
+          ctx.meshLeaders.endInboundTask(envelope.id)
+          active.delete(envelope.id)
+          throw error
+        }
       }
     } catch (error) {
       ctx.logger.warn(`Mesh Leader inbox poll failed: ${String(error)}`)
@@ -119,7 +123,8 @@ export function apply(ctx, config) {
   void poll()
   ctx.effect(() => async () => {
     clearInterval(timer)
-    if (active !== undefined) ctx.meshLeaders.endInboundTask(active.envelope.id)
+    for (const taskId of active.keys()) ctx.meshLeaders.endInboundTask(taskId)
+    active.clear()
     disposeController()
   }, 'agentMesh.leaderInbox()')
 }
@@ -144,11 +149,12 @@ async function handleCancellations(ctx, items, active, finish) {
   const cancellations = items.filter(item => item.kind === 'task_cancel' && item.correlation_id)
   for (const cancellation of cancellations) {
     const taskId = cancellation.correlation_id
-    if (active?.envelope.id === taskId && active.envelope.from_peer === cancellation.from_peer) {
-      if (!active.started && active.leader.inbox.remove(active.messageId)) {
+    const entry = active.get(taskId)
+    if (entry?.envelope.from_peer === cancellation.from_peer) {
+      if (!entry.started && entry.leader.inbox.remove(entry.messageId)) {
         await finish(taskId, { output: [], stop_reason: 'aborted' })
       } else {
-        active.leader.cancel({ kind: 'user' }, { keepInbox: true })
+        entry.leader.cancel({ kind: 'user' }, { keepInbox: true })
       }
       await ctx.mesh.call('inbox.ack', { id: cancellation.id })
       continue

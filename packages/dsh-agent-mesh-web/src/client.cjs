@@ -18,7 +18,7 @@ module.exports = function define(require) {
     allowPolicy: '接入策略', allowAll: '允许所有 Peer', allowListed: '仅允许列表', allowNone: '未允许远端 Peer',
     privateNetworks: '私网标识', bandwidth: '配置带宽（入 / 出）', pricing: '价格（空闲 / 忙时）', currency: '币种',
     storage: '可用存储', inventory: '共享对象', protocols: '协议', roles: '角色', workspaces: '工作区',
-    team: '本地 Agent Team', enabled: '启用', disabled: '禁用', parallel: '最大并行任务', session: '会话',
+    team: '本地 Agent Team', enabled: '启用', disabled: '禁用', parallel: '最大并行任务', session: 'Leader 会话', liveSessions: '存活会话',
     status: '状态', idle: '空闲', running: '执行中', sourceDelete: '源文件删除', expires: '广告过期时间',
     yes: '是', no: '否', none: '无', nodeCount: '节点数', edgeCount: '连接数',
     rendezvous: 'Rendezvous 服务', membership: '成员身份', signedMembership: '签名成员证书', founder: '创始节点', member: '成员节点', membershipRoot: '成员根 Peer', certificateExpires: '成员证书过期',
@@ -39,7 +39,7 @@ module.exports = function define(require) {
     allowPolicy: 'Admission policy', allowAll: 'Allow every peer', allowListed: 'Allowlist only', allowNone: 'No remote peers allowed',
     privateNetworks: 'Private network tags', bandwidth: 'Configured bandwidth (in / out)', pricing: 'Price (idle / busy)', currency: 'Currency',
     storage: 'Free storage', inventory: 'Shared objects', protocols: 'Protocols', roles: 'Roles', workspaces: 'Workspaces',
-    team: 'Local Agent Team', enabled: 'Enabled', disabled: 'Disabled', parallel: 'Max parallel tasks', session: 'Session',
+    team: 'Local Agent Team', enabled: 'Enabled', disabled: 'Disabled', parallel: 'Max parallel tasks', session: 'Leader Sessions', liveSessions: 'Live Sessions',
     status: 'Status', idle: 'Idle', running: 'Running', sourceDelete: 'Source deletion', expires: 'Advertisement expires',
     yes: 'Yes', no: 'No', none: 'None', nodeCount: 'Nodes', edgeCount: 'Connections',
     rendezvous: 'Rendezvous service', membership: 'Membership', signedMembership: 'Signed membership certificate', founder: 'Founder node', member: 'Member node', membershipRoot: 'Membership root peer', certificateExpires: 'Membership certificate expires',
@@ -134,6 +134,10 @@ module.exports = function define(require) {
   function LocalMetadata({ snapshot, t }) {
     const node = snapshot.node; const leader = snapshot.leader
     const policy = node.membership.enrolled ? t('signedMembership') : node.allow_all_peers ? t('allowAll') : node.allow_peers.length > 0 ? `${t('allowListed')} (${node.allow_peers.length})` : t('allowNone')
+    const leaderStatus = leader.sessions.some(session => session.status === 'running')
+      ? t('running')
+      : leader.sessions.some(session => session.status === 'idle') ? t('idle') : '—'
+    const leaderSessions = leader.sessions.map(session => `${session.session_id} (${session.status ? t(session.status) : t('offline')})`).join(', ')
     return h('div', { className: 'am-cards am-local-cards' },
       h('section', { className: 'am-panel' }, h('h3', { className: 'am-section-title' }, t('localMeta')), h(Facts, { rows: [
         [t('name'), node.name], [t('peerId'), node.peer_id, true], [t('network'), node.network_id], [t('mode'), node.mode],
@@ -145,7 +149,7 @@ module.exports = function define(require) {
         [t('pricing'), `${formatNumber(node.idle_price_per_gib)} / ${formatNumber(node.busy_price_per_gib)}`], [t('sourceDelete'), yesNo(node.allow_source_delete, t)],
       ] })),
       h('section', { className: 'am-panel' }, h('h3', { className: 'am-section-title' }, t('leaderMeta')), h(Facts, { rows: [
-        [t('status'), leader.status ? t(leader.status) : '—'], [t('session'), leader.session_id, true], [t('protocols'), list(node.leader.protocols, t)],
+        [t('status'), leaderStatus], [t('session'), leaderSessions, true], [t('liveSessions'), `${leader.live_count} / ${leader.session_count}`], [t('protocols'), list(node.leader.protocols, t)],
         [t('roles'), list(node.leader.roles, t)], [t('workspaces'), list(node.leader.workspaces, t)], [t('team'), t(node.leader.team_enabled ? 'enabled' : 'disabled')],
         [t('parallel'), String(node.leader.max_parallel_tasks)],
       ] }))
@@ -175,7 +179,7 @@ module.exports = function define(require) {
         h('div', { className: 'am-actions' }, h('button', { type: 'button', className: 'am-button', disabled: refreshing, onClick: onRefresh }, t(refreshing ? 'refreshing' : 'refresh')), h('span', { className: 'am-updated' }, `${t('updated')}: ${formatTime(snapshot.captured_at)}`))),
       h('div', { className: 'am-cards' },
         h(SummaryCard, { label: t('daemon'), value: t('online'), note: node.name || node.peer_id, live: true }),
-        h(SummaryCard, { label: t('leader'), value: t(leader.bound ? 'bound' : 'unbound'), note: t(leader.live ? 'live' : 'stale'), live: leader.bound && leader.live }),
+        h(SummaryCard, { label: t('leader'), value: leader.bound ? String(leader.session_count) : t('unbound'), note: `${leader.live_count} ${t('liveSessions')}`, live: leader.live_count > 0 }),
         h(SummaryCard, { label: t('peers'), value: String(node.connected_peers), note: `${snapshot.topology.edge_count} ${t('edgeCount')}` }),
         h(SummaryCard, { label: t('objects'), value: String(node.object_count), note: `${snapshot.peers.reduce((sum, peer) => sum + peer.inventory.object_count, 0)} ${t('peers')}` })),
       !node.membership.enrolled && !node.allow_all_peers && node.allow_peers.length === 0 ? h('div', { className: 'am-alert', role: 'status' }, t('allowlistWarning')) : null,

@@ -139,7 +139,7 @@ estimated_seconds = B × 8 / (effective_mbps × 1,000,000)
 
 `DeliverEnvelope` 承载 `message`、`task`、`task_cancel`、`task_progress` 和 `task_result`。信封带 UUID、发送/接收 Peer ID、网络、TTL、关联任务 UUID、JSON payload 和发送方成员证书。接收端核对实际连接 Peer ID、根签名、network binding、证书有效期（或兼容 allowlist），原子写入 inbox 后才 ACK；重复 UUID 不会重复落盘。
 
-Harness 采用 Leader 联邦而不是跨节点 Agent Team。每个节点只声明一个 `dsh-leader/1` 入口，teammate 永远留在本地。绑定的 Leader 收到 task 后可用本机 subagent/Agent Team 处理；`MeshLeaderProvider` 在发送端只创建一个远端 `SubagentRun` 代理。取消和结果通过 correlation ID 对齐。默认跨节点 hop budget 为 1，经过一次 Leader 委派后归零，但不限制远端 Leader 的本地 Team 调度。
+Harness 采用 Leader 联邦而不是跨节点 Agent Team。每个节点声明一个 `dsh-leader/1` 网络入口，但可在该入口后绑定多个根 Agent Session；teammate 永远留在本地。入站 task 分配给空闲 Leader Session，各 Session 独立持有任务和 hop budget，并可用本机 subagent/Agent Team 处理；`MeshLeaderProvider` 在发送端只创建一个远端 `SubagentRun` 代理。取消和结果通过 correlation ID 对齐。默认跨节点 hop budget 为 1，经过一次 Leader 委派后归零，但不限制远端 Leader 的本地 Team 调度。
 
 当前 inbox 是至少一次语义：崩溃窗口可能让任务重复激活，调用方应提供幂等任务。执行 lease、任务 journal 和已完成结果缓存属于下一阶段。
 

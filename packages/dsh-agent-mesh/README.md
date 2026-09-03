@@ -1,9 +1,9 @@
 # dsh-agent-mesh
 
-这是 DeepSeek Harness 的 out-of-tree Cordis bundle，不是 Codex `.codex-plugin`。它实现的是 Leader 联邦：每个节点只向 Mesh 暴露一个 Harness Leader，Leader 自己管理本机 subagent 或 Agent Team。
+这是 DeepSeek Harness 的 out-of-tree Cordis bundle，不是 Codex `.codex-plugin`。它实现的是 Leader 联邦：每个节点可绑定多个 Harness Leader Session，每个 Leader 自己管理本机 subagent 或 Agent Team。
 
 - `service.js`：提供 `ctx.mesh`；`managed` 模式由 `ctx.subprocess` 启停 Rust daemon，`external` 模式连接已有 daemon。
-- `leader.js`：持久保存本节点的 Leader Session 绑定，teammate 不能冒充 Leader。
+- `leader.js`：持久保存本节点的 Leader Session 集合，teammate 不能冒充 Leader；入站任务和 hop budget 按 Session 隔离。
 - `leader-provider.js`：注册原生 `mesh-leader` Subagent Provider；`mesh_delegate` 通过 Harness 的 `ctx.subagents` 生命周期委派给另一位 Leader。
 - `guidance.js`：只向已绑定的 Leader 注入主动调度策略和实时路由快照，并从其他 Session 的模型工具中移除 Leader-only 操作。
 - `inbox.js`：把远端任务串行交给已绑定的本机 Leader，支持取消、自动结果和显式完成。
@@ -42,13 +42,13 @@ pixi run pnpm dsh --profile mesh
 
 运行外部模式：先用 CLI 启动 daemon，再设置 `AGENT_MESH_MODE=external` 和相同的 `AGENT_MESH_STATE_DIR`。
 
-启动后，在准备作为节点入口的根会话中先让模型调用：
+启动后，在每个准备作为节点入口的根会话中让模型调用：
 
 ```text
 mesh_leader_bind({})
 ```
 
-绑定写入 `<stateDir>/leader.json`。该 Session 重新加载后会自动恢复 Leader 身份；若它当前未加载，远端任务继续留在持久 inbox 中。要替换 Leader，使用 `mesh_leader_bind({ replace: true })`。
+绑定追加写入 `<stateDir>/leader.json`。每次不带参数调用都会将当前根 Session 加入 Leader 集合；已绑定 Session 重新加载后会恢复 Leader 身份。远端任务会并行派发给空闲 Leader，每个 Leader 同时处理一个入站任务；没有空闲 Leader 时任务继续留在持久 inbox 中。要清空旧集合并只保留当前 Session，使用 `mesh_leader_bind({ replace: true })`。
 
 Leader 发起委派时调用：
 
@@ -64,7 +64,7 @@ Leader 发起委派时调用：
 
 每次 Leader 组装模型请求时，插件从本地 daemon 读取当前候选节点，并以运行时上下文提供节点角色、workspace、路由、RTT、负载和本地 Team 并发上限。模型会在任务可独立执行且远端具备合适资源或并行收益时主动调用 `mesh_delegate`；小任务、依赖当前本地状态的任务、无候选节点以及 hop budget 耗尽的任务保留在本地。远端声明按不可信路由元数据处理，不能作为指令。
 
-其他 Session 仍可看到 `mesh_leader_bind` 和 `mesh_leader_status`，但不会在模型请求中获得 `mesh_delegate`、传输、消息或任务处理工具。Leader 资格仍由每次工具执行时的身份检查强制执行，提示和工具可见性不构成权限边界。
+其他 Session 仍可看到 `mesh_leader_bind` 和 `mesh_leader_status`，但不会在模型请求中获得 `mesh_delegate`、传输、消息或任务处理工具。`mesh_leader_status` 会列出全部绑定和存活状态，并标明调用它的当前 Session 是否为 Leader。Leader 资格仍由每次工具执行时的身份检查强制执行，提示和工具可见性不构成权限边界。
 
 收到任务的 Leader 可以调用本机 `subagent`/Agent Team，最后调用 `mesh_task_complete`；若未显式完成，则该任务 turn 的最终 assistant 输出会自动回传。
 

@@ -45,6 +45,7 @@ test('routing snapshot gives a decisive local fallback without candidates', () =
 
 test('guidance is visible only to the bound Leader and filters Leader-only tools elsewhere', async () => {
   const leader = { id: 'leader', session: { header: {} } }
+  const otherRoot = { id: 'other-root', session: { header: {} } }
   const teammate = { id: 'teammate', session: { header: { parentSession: 'leader' } } }
   let section
   let assemble
@@ -58,7 +59,7 @@ test('guidance is visible only to the bound Leader and filters Leader-only tools
       section(value) { section = value },
     },
     meshLeaders: {
-      leader: () => leader,
+      isLeader: agent => agent === leader,
       view: () => ({ bound: true }),
     },
     mesh: {
@@ -76,6 +77,7 @@ test('guidance is visible only to the bound Leader and filters Leader-only tools
   apply(ctx)
 
   assert.equal(section.text({ agent: leader }), LEADER_POLICY)
+  assert.match(section.text({ agent: otherRoot }), /one of the node Leaders/)
   assert.equal(section.text({ agent: teammate }), '')
 
   const leaderAssembly = {
@@ -105,7 +107,7 @@ test('guidance is visible only to the bound Leader and filters Leader-only tools
   assert.equal(peerCalls, 1)
 })
 
-test('unbound root receives activation guidance and discovery failure degrades locally', async () => {
+test('each unbound root receives activation guidance and discovery failure degrades locally', async () => {
   const root = { id: 'root', session: { header: {} } }
   let section
   let assemble
@@ -115,17 +117,17 @@ test('unbound root receives activation guidance and discovery failure degrades l
       section(value) { section = value },
     },
     meshLeaders: {
-      leader: () => root,
+      isLeader: agent => agent === root,
       view: () => ({ bound: false }),
     },
     mesh: { call: async () => { throw new Error('offline') } },
     on(_event, listener) { assemble = listener },
   }
   apply(ctx)
-  ctx.meshLeaders.leader = () => undefined
+  ctx.meshLeaders.isLeader = () => false
   assert.match(section.text({ agent: root }), /Call mesh_leader_bind only when the user designates/)
 
-  ctx.meshLeaders.leader = () => root
+  ctx.meshLeaders.isLeader = agent => agent === root
   const assembly = { sections: [], contexts: [], tools: [], variables: {} }
   const result = await assemble(assembly, { agent: root }, async () => assembly)
   assert.match(result.contexts[0].text, /snapshot is unavailable/)

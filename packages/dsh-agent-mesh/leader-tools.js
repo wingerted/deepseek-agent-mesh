@@ -9,9 +9,9 @@ const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value
 export function apply(ctx) {
   ctx.tools.register(defineTool({
     name: 'mesh_leader_bind',
-    description: 'Bind the calling root Agent as this node\'s persistent Mesh Leader. Only the bound Leader may delegate to other nodes or complete inbound tasks.',
+    description: 'Add the calling root Agent to this node\'s persistent Mesh Leader Sessions. Every bound Leader may delegate and receive its own inbound tasks.',
     parameters: {
-      replace: { type: 'boolean', description: 'Replace a different existing Leader binding.' },
+      replace: { type: 'boolean', description: 'Replace all existing Leader Sessions with the caller instead of adding it.' },
     },
     output: { schema: objectOutput, render: renderJson },
     async execute(args, exec) {
@@ -22,10 +22,10 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mesh_leader_status',
-    description: 'Show which Harness Session is bound as this node\'s Mesh Leader and whether it is live.',
+    description: 'List this node\'s bound Mesh Leader Sessions, their live states, and whether the caller is a Leader.',
     parameters: {},
     output: { schema: objectOutput, render: renderJson },
-    execute: () => ctx.meshLeaders.view(),
+    execute: (_args, exec) => ctx.meshLeaders.view(exec.agent),
   }))
 
   ctx.tools.register(defineTool({

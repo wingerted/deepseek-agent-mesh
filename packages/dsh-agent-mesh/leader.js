@@ -5,91 +5,115 @@ import { Service } from '@deepseek-ai/cordis'
 export const name = 'agent-mesh-leader'
 export const inject = ['agents', 'mesh']
 
-const STATE_VERSION = 1
+const STATE_VERSION = 2
 
 export class MeshLeaderRuntime extends Service {
   constructor(ctx) {
     super(ctx, 'meshLeaders')
     this.runtimeCtx = ctx
-    this.leaderSessionId = undefined
+    this.leaderSessionIds = new Set()
+    this.bindingQueue = Promise.resolve()
     this.taskController = undefined
-    this.inboundTask = undefined
+    this.inboundTasks = new Map()
   }
 
   async load() {
     try {
       const state = JSON.parse(await readFile(this.statePath(), 'utf8'))
-      if (state.version === STATE_VERSION && typeof state.leader_session_id === 'string') {
-        this.leaderSessionId = state.leader_session_id
+      if (state.version === STATE_VERSION && Array.isArray(state.leader_session_ids)) {
+        this.leaderSessionIds = new Set(state.leader_session_ids.filter(value => typeof value === 'string' && value !== ''))
+      } else if (state.version === 1 && typeof state.leader_session_id === 'string') {
+        this.leaderSessionIds.add(state.leader_session_id)
       }
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
     }
   }
 
-  leader() {
-    if (this.leaderSessionId === undefined) return undefined
-    return this.runtimeCtx.agents.get(this.leaderSessionId)
+  leaders() {
+    return [...this.leaderSessionIds]
+      .map(sessionId => this.runtimeCtx.agents.get(sessionId))
+      .filter(agent => agent !== undefined)
   }
 
-  view() {
-    const leader = this.leader()
+  isLeader(agent) {
+    return agent !== undefined && this.leaderSessionIds.has(String(agent.id))
+  }
+
+  view(agent) {
+    const leaders = [...this.leaderSessionIds].map(sessionId => {
+      const live = this.runtimeCtx.agents.get(sessionId)
+      return {
+        session_id: sessionId,
+        live: live !== undefined,
+        status: live?.status ?? null,
+      }
+    })
     return {
-      bound: this.leaderSessionId !== undefined,
-      leader_session_id: this.leaderSessionId,
-      live: leader !== undefined,
-      status: leader?.status,
+      bound: leaders.length > 0,
+      leader_session_ids: leaders.map(leader => leader.session_id),
+      live_count: leaders.filter(leader => leader.live).length,
+      leaders,
+      current_session_id: agent === undefined ? null : String(agent.id),
+      current_session_is_leader: agent === undefined ? null : this.isLeader(agent),
     }
   }
 
-  async bind(agent, replace = false) {
+  bind(agent, replace = false) {
     if (agent.session.header.parentSession !== undefined) {
       throw new Error('only a root Harness Agent can become the Mesh Leader')
     }
-    if (this.leaderSessionId !== undefined && this.leaderSessionId !== String(agent.id) && !replace) {
-      throw new Error(`Mesh Leader is already bound to Session ${this.leaderSessionId}; set replace=true to replace it`)
-    }
-    await mkdir(this.ctx.mesh.stateDir, { recursive: true })
-    const target = this.statePath()
-    const temporary = `${target}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify({
-      version: STATE_VERSION,
-      leader_session_id: String(agent.id),
-    }, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, target)
-    this.leaderSessionId = String(agent.id)
-    return this.view()
+    const queued = this.bindingQueue.then(async () => {
+      const sessionId = String(agent.id)
+      if (replace) this.leaderSessionIds.clear()
+      this.leaderSessionIds.add(sessionId)
+      await mkdir(this.ctx.mesh.stateDir, { recursive: true })
+      const target = this.statePath()
+      const temporary = `${target}.${process.pid}.tmp`
+      await writeFile(temporary, `${JSON.stringify({
+        version: STATE_VERSION,
+        leader_session_ids: [...this.leaderSessionIds],
+      }, null, 2)}\n`, { mode: 0o600 })
+      await rename(temporary, target)
+      return this.view(agent)
+    })
+    this.bindingQueue = queued.then(() => undefined, () => undefined)
+    return queued
   }
 
   assertLeader(agent) {
-    const live = this.leader()
-    if (live === undefined || live !== agent) {
-      const suffix = this.leaderSessionId === undefined
-        ? 'no Mesh Leader is bound; call mesh_leader_bind first'
-        : `this node's Mesh Leader is Session ${this.leaderSessionId}`
+    if (!this.isLeader(agent)) {
+      const suffix = this.leaderSessionIds.size === 0
+        ? 'no Mesh Leader Session is bound; call mesh_leader_bind first'
+        : `this node's Mesh Leader Sessions are ${[...this.leaderSessionIds].join(', ')}`
       throw new Error(`Leader-only Mesh operation rejected: ${suffix}`)
     }
-    return live
+    return agent
   }
 
   beginInboundTask(agent, taskId, hopBudget) {
     this.assertLeader(agent)
-    if (this.inboundTask !== undefined && this.inboundTask.taskId !== taskId) {
-      throw new Error(`Mesh Leader is already processing inbound task ${this.inboundTask.taskId}`)
+    const sessionId = String(agent.id)
+    const existing = [...this.inboundTasks.values()].find(task => task.leaderSessionId === sessionId)
+    if (existing !== undefined && existing.taskId !== taskId) {
+      throw new Error(`Mesh Leader Session ${sessionId} is already processing inbound task ${existing.taskId}`)
     }
-    this.inboundTask = {
+    this.inboundTasks.set(taskId, {
       taskId,
+      leaderSessionId: sessionId,
       hopBudget: Math.max(0, Number.isSafeInteger(hopBudget) ? hopBudget : 0),
-    }
+    })
   }
 
   endInboundTask(taskId) {
-    if (this.inboundTask?.taskId === taskId) this.inboundTask = undefined
+    this.inboundTasks.delete(taskId)
   }
 
   outboundHopBudget(agent, configuredBudget) {
     this.assertLeader(agent)
-    const available = this.inboundTask?.hopBudget ?? Math.max(0, Math.trunc(configuredBudget))
+    const sessionId = String(agent.id)
+    const inboundTask = [...this.inboundTasks.values()].find(task => task.leaderSessionId === sessionId)
+    const available = inboundTask?.hopBudget ?? Math.max(0, Math.trunc(configuredBudget))
     if (available <= 0) {
       throw new Error('cross-node delegation budget is exhausted; use this node\'s local Agent Team instead')
     }
@@ -106,6 +130,10 @@ export class MeshLeaderRuntime extends Service {
 
   complete(agent, taskId, outcome) {
     this.assertLeader(agent)
+    const task = this.inboundTasks.get(taskId)
+    if (task === undefined || task.leaderSessionId !== String(agent.id)) {
+      throw new Error(`inbound Mesh Leader task ${taskId} is not assigned to this Leader Session`)
+    }
     if (this.taskController === undefined) throw new Error('Mesh Leader inbox is unavailable')
     return this.taskController.complete(taskId, outcome)
   }

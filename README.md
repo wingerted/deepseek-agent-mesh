@@ -4,7 +4,7 @@
 
 `agent-mesh` 是一个由单一 Pixi workspace 管理的 Agent P2P monorepo。它同时交付独立 Rust binary、DeepSeek Harness Leader 插件、Harness Web 状态/拓扑插件，以及二者共享的本地 RPC client。
 
-网络模型是 Leader 联邦：每个节点的 DeepSeek Harness 根 Agent 是一个 Leader，Leader 自己管理本机 subagent 或 Agent Team；跨节点只发生 Leader-to-Leader 通信和任务委派。
+网络模型是 Leader 联邦：每个节点可绑定多个 DeepSeek Harness 根 Agent Session 作为 Leader，各 Leader 自己管理本机 subagent 或 Agent Team；跨节点只发生 Leader-to-Leader 通信和任务委派。
 
 ## Monorepo
 

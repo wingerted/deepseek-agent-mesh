@@ -4,7 +4,7 @@
 
 页面展示：
 
-- 本机 daemon、绑定 Leader、Peer 数和对象数。
+- 本机 daemon、全部绑定/存活的 Leader Session、Peer 数和对象数。
 - 本机网络、签名成员身份、rendezvous、配置带宽、价格、接入策略与 Leader/Agent Team 声明。
 - Peer 的 route、RTT、负载、地域、存储、对象库存和 Leader 能力。
 - 以本机为中心的实时拓扑；私网直连、公网直连和中继使用不同连线。
