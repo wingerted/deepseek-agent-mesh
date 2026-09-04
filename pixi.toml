@@ -1,6 +1,6 @@
 [workspace]
 name = "agent-mesh"
-version = "0.1.2"
+version = "0.2.0"
 description = "Decentralized Agent P2P mesh and DeepSeek Harness plugins"
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]

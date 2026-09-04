@@ -27,7 +27,7 @@ open apps/ios/DeepseekAgentMesh.xcodeproj
 3. Use **总览** for network health and quick actions, **Leader** to inspect capabilities, and **动态** to track delivery and task results.
 4. Direct messages target one Leader. “All Leaders” fan-outs to the online set shown in the confirmation dialog. A task always targets exactly one Leader and is executed by that Leader's own Agent Team.
 
-The **协商** tab creates a bounded `mesh-deliberation/1` room. Select the Leader seats, topic, decision goal, and maximum rounds. The Watcher sends one phase prompt per Leader, ingests one authenticated contribution per granted slot, advances phases explicitly, and displays the Rust-generated decision certificate. It facilitates the room but never speaks or votes.
+The **群聊** tab creates a persistent `mesh-chat/1` room with a normal message timeline and composer. Each Watcher message grants every selected Leader at most one reply slot; Leader replies return to the host and never recursively trigger other Leaders. Rust enforces participant, turn, responder, byte, replay, and total-message limits behind the chat UI.
 
 The invite is needed only for first enrollment. The app persists its Ed25519 identity and signed membership under Application Support and automatically reconnects after a successful join.
 

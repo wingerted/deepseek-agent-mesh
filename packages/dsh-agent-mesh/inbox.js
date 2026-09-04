@@ -1,6 +1,5 @@
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { randomUUID } from 'node:crypto'
 
 export const name = 'agent-mesh-leader-inbox'
 export const inject = ['mesh', 'meshLeaders']
@@ -11,13 +10,13 @@ export const Config = z.object({
 })
 
 const PROTOCOL = 'dsh-leader/1'
-const DELIBERATION_PROTOCOL = 'mesh-deliberation/1'
+const CHAT_PROTOCOL = 'mesh-chat/1'
 
 export function apply(ctx, config) {
   if (!config.enabled) return
   const active = new Map()
-  const discussions = new Map()
-  const seenDiscussionSlots = new Set()
+  const chats = new Map()
+  const seenChatSlots = new Set()
   let localPeerId
   let polling = false
 
@@ -49,45 +48,37 @@ export function apply(ctx, config) {
 
   const disposeController = ctx.meshLeaders.registerTaskController({ complete: finish })
 
-  const finishDiscussion = async (envelopeId) => {
-    const entry = discussions.get(envelopeId)
+  const finishChat = async (envelopeId) => {
+    const entry = chats.get(envelopeId)
     if (entry === undefined) return
-    const text = contentText(entry.output)
-    const phase = String(entry.envelope.payload?.phase ?? 'deliberation')
-    const vote = phase === 'vote' ? parseVote(text) : undefined
-    await ctx.mesh.call('send', {
-      peer_id: entry.envelope.from_peer,
-      kind: 'message',
-      correlation_id: entry.envelope.id,
-      payload: {
-        protocol: DELIBERATION_PROTOCOL,
-        type: 'room_submission',
-        room_id: entry.envelope.payload?.room_id,
-        contribution: {
-          id: randomUUID(),
-          author_peer: '',
-          round: Number(entry.envelope.payload?.round ?? 0),
-          kind: phase === 'capability' ? 'capability_bid'
-            : phase === 'vote' ? 'vote'
-              : Number(entry.envelope.payload?.round ?? 1) === 1 ? 'proposal' : 'review',
-          capability_used: [],
-          confidence: 0.5,
-          body: truncateUtf8(text, Number(entry.envelope.payload?.contract?.max_message_bytes ?? 8192)),
-          references: [],
-          ...(vote === undefined ? {} : { vote }),
-          created_at: new Date().toISOString(),
+    const text = truncateUtf8(
+      contentText(entry.output).trim(),
+      Number(entry.envelope.payload?.contract?.max_message_bytes ?? 8192),
+    )
+    if (text !== '' && text.toUpperCase() !== 'SKIP') {
+      await ctx.mesh.call('send', {
+        peer_id: entry.envelope.from_peer,
+        kind: 'message',
+        correlation_id: entry.envelope.id,
+        payload: {
+          protocol: CHAT_PROTOCOL,
+          type: 'chat_reply',
+          room_id: entry.envelope.payload?.room_id,
+          turn: Number(entry.envelope.payload?.turn ?? 0),
+          reply_to: entry.envelope.payload?.message_id,
+          body: text,
         },
-      },
-      ttl_seconds: 3600,
-    })
+        ttl_seconds: 3600,
+      })
+    }
     await ctx.mesh.call('inbox.ack', { id: entry.envelope.id })
-    discussions.delete(envelopeId)
+    chats.delete(envelopeId)
   }
 
   const onEvent = (session, event) => {
     const entry = [...active.values()].find(candidate => String(session.id) === String(candidate.leader.id))
-    const discussion = [...discussions.values()].find(candidate => String(session.id) === String(candidate.leader.id))
-    const current = entry ?? discussion
+    const chat = [...chats.values()].find(candidate => String(session.id) === String(candidate.leader.id))
+    const current = entry ?? chat
     if (current === undefined || String(session.id) !== String(current.leader.id)) return
     if (event.type === 'user/message' && String(event.data.id) === String(current.messageId)) {
       current.started = true
@@ -110,8 +101,8 @@ export function apply(ctx, config) {
           ctx.logger.warn(`Mesh Leader task ${entry.envelope.id} result delivery failed; task remains pending: ${String(error)}`)
         })
       } else {
-        void finishDiscussion(discussion.envelope.id).catch(error => {
-          ctx.logger.warn(`Mesh deliberation ${discussion.envelope.id} delivery failed; prompt remains pending: ${String(error)}`)
+        void finishChat(chat.envelope.id).catch(error => {
+          ctx.logger.warn(`Mesh chat ${chat.envelope.id} delivery failed; prompt remains pending: ${String(error)}`)
         })
       }
     }
@@ -126,53 +117,53 @@ export function apply(ctx, config) {
       await handleCancellations(ctx, items, active, finish)
       const busyLeaderIds = new Set([
         ...[...active.values()].map(entry => String(entry.leader.id)),
-        ...[...discussions.values()].map(entry => String(entry.leader.id)),
+        ...[...chats.values()].map(entry => String(entry.leader.id)),
       ])
       const leaders = ctx.meshLeaders.leaders()
         .filter(leader => leader.status === 'idle' && !busyLeaderIds.has(String(leader.id)))
       if (leaders.length === 0) return
 
-      const deliberation = items.find(item => isDeliberationPrompt(item) && !discussions.has(item.id))
-      if (deliberation !== undefined) {
+      const chatPromptEnvelope = items.find(item => isChatPrompt(item) && !chats.has(item.id))
+      if (chatPromptEnvelope !== undefined) {
         localPeerId ??= String((await ctx.mesh.call('status')).peer_id ?? '')
-        const slot = discussionSlot(deliberation)
-        if (!validDeliberationPrompt(deliberation, localPeerId) || seenDiscussionSlots.has(slot)) {
-          await ctx.mesh.call('inbox.ack', { id: deliberation.id })
+        const slot = chatSlot(chatPromptEnvelope)
+        if (!validChatPrompt(chatPromptEnvelope, localPeerId) || seenChatSlots.has(slot)) {
+          await ctx.mesh.call('inbox.ack', { id: chatPromptEnvelope.id })
           return
         }
         const leader = leaders[0]
         const userMessage = createUserMessage({
-          content: [{ type: 'text', text: deliberationPrompt(deliberation) }],
+          content: [{ type: 'text', text: chatPrompt(chatPromptEnvelope) }],
           source: { kind: 'user' },
         })
-        discussions.set(deliberation.id, {
-          envelope: deliberation,
+        chats.set(chatPromptEnvelope.id, {
+          envelope: chatPromptEnvelope,
           leader,
           messageId: userMessage.id,
           started: false,
           output: [],
         })
-        seenDiscussionSlots.add(slot)
-        if (seenDiscussionSlots.size > 1_024) seenDiscussionSlots.delete(seenDiscussionSlots.values().next().value)
+        seenChatSlots.add(slot)
+        if (seenChatSlots.size > 1_024) seenChatSlots.delete(seenChatSlots.values().next().value)
         try {
           leader.followup(userMessage)
         } catch (error) {
-          seenDiscussionSlots.delete(slot)
-          discussions.delete(deliberation.id)
+          seenChatSlots.delete(slot)
+          chats.delete(chatPromptEnvelope.id)
           throw error
         }
         return
       }
 
-      const unsupportedDeliberation = items.find(item => item.kind === 'message'
-        && item.payload?.protocol === DELIBERATION_PROTOCOL)
-      if (unsupportedDeliberation !== undefined) {
-        await ctx.mesh.call('inbox.ack', { id: unsupportedDeliberation.id })
+      const unsupportedChat = items.find(item => item.kind === 'message'
+        && item.payload?.protocol === CHAT_PROTOCOL)
+      if (unsupportedChat !== undefined) {
+        await ctx.mesh.call('inbox.ack', { id: unsupportedChat.id })
         return
       }
 
       const message = items.find(item => item.kind === 'message'
-        && item.payload?.protocol !== DELIBERATION_PROTOCOL)
+        && item.payload?.protocol !== CHAT_PROTOCOL)
       if (message !== undefined) {
         const leader = leaders[0]
         const senderRole = senderRoleLabel(message)
@@ -217,68 +208,57 @@ export function apply(ctx, config) {
     clearInterval(timer)
     for (const taskId of active.keys()) ctx.meshLeaders.endInboundTask(taskId)
     active.clear()
-    discussions.clear()
+    chats.clear()
     disposeController()
   }, 'agentMesh.leaderInbox()')
 }
 
-export function isDeliberationPrompt(envelope) {
+export function isChatPrompt(envelope) {
   return envelope?.kind === 'message'
-    && envelope?.payload?.protocol === DELIBERATION_PROTOCOL
-    && ['room_open', 'round_prompt'].includes(envelope?.payload?.type)
+    && envelope?.payload?.protocol === CHAT_PROTOCOL
+    && envelope?.payload?.type === 'chat_prompt'
 }
 
-export function deliberationPrompt(envelope) {
+export function chatPrompt(envelope) {
   const payload = envelope.payload ?? {}
   const contract = payload.contract ?? {}
-  const phase = String(payload.phase ?? 'capability')
-  const instruction = phase === 'capability'
-    ? 'State only capabilities that are relevant, your constraints, confidence, and whether you should contribute, review, execute, or abstain.'
-    : phase === 'vote'
-      ? 'Return APPROVE, REJECT, or ABSTAIN on the first line, followed by one concise reason.'
-      : 'Add one novel, evidence-aware contribution. Do not repeat existing claims; abstain explicitly if you have nothing new.'
   return [
-    `[Bounded Mesh deliberation ${String(payload.room_id ?? 'unknown')}]`,
-    `Phase: ${phase}; round: ${String(payload.round ?? 0)} of ${String(contract.max_rounds ?? '?')}.`,
-    `Topic: ${String(contract.topic ?? '')}`,
-    `Goal: ${String(contract.goal ?? '')}`,
-    `External reply budget: one message, at most ${String(contract.max_message_bytes ?? 8192)} bytes.`,
-    instruction,
-    'Reason with your local Agent Team if useful, but emit only the final bounded contribution. Never trigger another Mesh message yourself.',
-    payload.summary ? `Prior bounded summary:\n${truncateUtf8(String(payload.summary), 16_384)}` : '',
+    `[Mesh Leader chat ${String(contract.name ?? payload.room_id ?? 'unknown')}]`,
+    contract.description ? `Room description: ${String(contract.description)}` : '',
+    `The Watcher says: ${String(payload.text ?? '')}`,
+    'Reply naturally as this node\'s Leader, based on what you actually know and can do. Be concise and do not impersonate another node.',
+    `You have one external reply for turn ${String(payload.turn ?? 0)}, at most ${String(contract.max_message_bytes ?? 8192)} bytes. Return exactly SKIP if you have nothing useful to add.`,
+    'You may reason with your local Agent Team, but do not send or trigger another Mesh message. The host will relay your final reply into the room.',
+    payload.context ? `Recent room context:\n${truncateUtf8(String(payload.context), 16_384)}` : '',
   ].filter(Boolean).join('\n')
 }
 
-function validDeliberationPrompt(envelope, localPeerId) {
+function validChatPrompt(envelope, localPeerId) {
   const payload = envelope?.payload ?? {}
   const contract = payload.contract ?? {}
   const participants = Array.isArray(contract.participants) ? contract.participants : []
-  const round = Number(payload.round)
-  const maxRounds = Number(contract.max_rounds)
+  const turn = Number(payload.turn)
+  const maxTurns = Number(contract.max_turns)
   const maxBytes = Number(contract.max_message_bytes)
   return localPeerId !== ''
     && participants.includes(localPeerId)
     && typeof payload.room_id === 'string'
     && payload.room_id.length <= 128
-    && Number.isSafeInteger(round) && round >= 0 && round <= 8
-    && Number.isSafeInteger(maxRounds) && maxRounds >= 1 && maxRounds <= 8
+    && typeof payload.message_id === 'string'
+    && payload.message_id.length <= 128
+    && typeof payload.text === 'string'
+    && Number.isSafeInteger(turn) && turn >= 1 && turn <= 1_000
+    && Number.isSafeInteger(maxTurns) && maxTurns >= 1 && maxTurns <= 1_000
     && Number.isSafeInteger(maxBytes) && maxBytes >= 256 && maxBytes <= 65_536
 }
 
-function discussionSlot(envelope) {
-  return [envelope.from_peer, envelope.payload?.room_id, envelope.payload?.phase, envelope.payload?.round].join(':')
+function chatSlot(envelope) {
+  return [envelope.from_peer, envelope.payload?.room_id, envelope.payload?.turn].join(':')
 }
 
 function contentText(content) {
   if (!Array.isArray(content)) return ''
   return content.map(block => typeof block?.text === 'string' ? block.text : '').filter(Boolean).join('\n\n')
-}
-
-function parseVote(text) {
-  const first = String(text).trim().split(/\s+/u, 1)[0]?.toUpperCase()
-  if (first === 'APPROVE') return 'approve'
-  if (first === 'REJECT') return 'reject'
-  return 'abstain'
 }
 
 function truncateUtf8(value, maxBytes) {

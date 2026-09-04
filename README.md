@@ -60,11 +60,11 @@ open apps/ios/DeepseekAgentMesh.xcodeproj
 
 真机加入方式、交互语义以及 iOS 后台运行边界见 [iOS README](apps/ios/README.md) 和 [iOS Operator UX](docs/ios-operator-ux.md)。
 
-## 有界 Leader 协商
+## Leader 群聊
 
-`mesh-deliberation/1` 把 Leader 群聊约束为能力申报、有限轮讨论、表决、关闭四个单向阶段。每个 Leader 可在本节点使用自己的 Agent Team 思考，但每个发言槽只向主持 Watcher 返回一条贡献；收到其他 Leader 的贡献不会自动回复。Rust reducer 强制参与者、轮次、发言人数、每 Leader 次数、单条字节数、总消息数以及精确的法定人数/通过比例，关闭后生成决议证书。
+`mesh-chat/1` 提供持续的 Leader 聊天室：Watcher 发一条消息，每个被选 Leader 最多自然回复一次，回复只回到房主并进入时间线，不会递归触发其他 Agent。每个 Leader 仍可在自己的节点内使用 Agent Team 思考，也可以在没有有效信息时返回 `SKIP`。
 
-iOS 的 **协商** Tab 可选择在线 Leader、设置目标和轮数、推进阶段并查看发言与最终证书。完整 wire payload、状态机和接收端防重放规则见 [Mesh Deliberation v1](spec/mesh-deliberation-v1.md)。
+iOS 的 **群聊** Tab 提供房间列表、聊天气泡、成员状态和固定输入框。最大响应人数、单条字节数、用户发言次数与总消息数都由 Rust reducer 强制执行，但只是后台防爆机制，不再表现为能力申报、讨论、投票等会议阶段。完整 wire payload 与防重放规则见 [Mesh Leader Chat v1](spec/mesh-chat-v1.md)。
 
 ## 最简安装与组网
 
@@ -86,8 +86,8 @@ pixi global install \
 GitHub Actions 在 tag `v<recipe-version>` 上用标准免费 runner 并行构建 `linux-64` 与 `osx-arm64`，临时 artifact 仅保留 3 天，长期文件和 `SHA256SUMS` 发布到 GitHub Release。也可以在 Actions 页面手动运行 `Release Conda packages`：
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 第一台 Leader 在 WireGuard 地址上创建网络并启动；终端会打印 Harness Web URL 和一枚 15 分钟、单次使用的 `mesh1:` 邀请码：

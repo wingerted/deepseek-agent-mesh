@@ -22,8 +22,8 @@ struct ContentView: View {
                 .tabItem { Label("总览", systemImage: "square.grid.2x2.fill") }
             NavigationStack { LeadersView(composer: $composer) }
                 .tabItem { Label("Leader", systemImage: "point.3.connected.trianglepath.dotted") }
-            NavigationStack { DeliberationsView() }
-                .tabItem { Label("协商", systemImage: "person.3.sequence.fill") }
+            NavigationStack { ChatsView() }
+                .tabItem { Label("群聊", systemImage: "bubble.left.and.bubble.right.fill") }
             NavigationStack { InboxView() }
                 .tabItem { Label("动态", systemImage: "tray.full.fill") }
                 .badge(model.unreadCount)
@@ -45,7 +45,7 @@ struct ContentView: View {
     }
 }
 
-private struct DeliberationsView: View {
+private struct ChatsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showingCreate = false
 
@@ -53,29 +53,25 @@ private struct DeliberationsView: View {
         Group {
             if model.rooms.isEmpty {
                 ContentUnavailableView(
-                    "还没有有界协商",
-                    systemImage: "person.3.sequence",
-                    description: Text("选择 Leader、轮数和目标；Watcher 只主持流程，不参与发言或表决。")
+                    "还没有 Leader 群聊",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("建一个房间，把不同节点的 Leader 拉进来直接聊天。")
                 )
             } else {
                 List(model.rooms) { room in
-                    NavigationLink { DeliberationDetailView(roomID: room.id) } label: {
+                    NavigationLink { ChatDetailView(roomID: room.id) } label: {
                         VStack(alignment: .leading, spacing: 7) {
                             HStack {
-                                Text(room.topic).font(.headline).lineLimit(1)
+                                Text(room.name).font(.headline).lineLimit(1)
                                 Spacer()
-                                Text(room.phaseTitle)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(room.phase == .closed ? .green : MeshTheme.indigo)
+                                Circle().fill(room.isOpen ? Color.green : Color.secondary)
+                                    .frame(width: 8, height: 8)
                             }
-                            Text(room.goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                            Text(room.lastMessage?.body ?? (room.description.isEmpty ? "还没有消息" : room.description))
+                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                             HStack(spacing: 12) {
                                 Label("\(room.participants.count) Leader", systemImage: "person.3")
-                                Label("\(room.contributions.count) 发言", systemImage: "text.bubble")
-                                if let decision = room.decision {
-                                    Label(decision.outcome == "approve" ? "通过" : "未通过",
-                                          systemImage: decision.outcome == "approve" ? "checkmark.seal" : "xmark.seal")
-                                }
+                                Label("\(room.messages.count) 条消息", systemImage: "message")
                             }
                             .font(.caption).foregroundStyle(.secondary)
                         }
@@ -85,45 +81,43 @@ private struct DeliberationsView: View {
                 .listStyle(.plain)
             }
         }
-        .navigationTitle("Leader 协商")
+        .navigationTitle("Leader 群聊")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingCreate = true } label: { Image(systemName: "plus") }
-                    .disabled(!model.isRunning || model.leaders.isEmpty)
+                    .disabled(!model.isRunning || !model.leaders.contains(where: \.supportsChat))
             }
         }
-        .sheet(isPresented: $showingCreate) { CreateDeliberationSheet() }
+        .sheet(isPresented: $showingCreate) { CreateChatSheet() }
         .refreshable { model.refresh() }
     }
 }
 
-private struct CreateDeliberationSheet: View {
+private struct CreateChatSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var topic = ""
-    @State private var goal = ""
-    @State private var maxRounds = 2
+    @State private var name = ""
+    @State private var description = ""
     @State private var selected = Set<String>()
 
+    private var chatLeaders: [LeaderPeer] { model.leaders.filter(\.supportsChat) }
+
     private var canCreate: Bool {
-        !topic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !selected.isEmpty
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selected.isEmpty
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("协商契约") {
-                    TextField("议题", text: $topic)
-                    TextField("必须形成的决议", text: $goal, axis: .vertical).lineLimit(2...5)
-                    Stepper("最多 \(maxRounds) 轮讨论", value: $maxRounds, in: 1...5)
+                Section("群聊") {
+                    TextField("群聊名称", text: $name)
+                    TextField("聊什么（可选）", text: $description, axis: .vertical).lineLimit(2...4)
                 }
-                Section("Leader 发言席（\(selected.count)）") {
-                    ForEach(model.leaders) { leader in
+                Section("成员（\(selected.count)）") {
+                    ForEach(chatLeaders) { leader in
                         Button {
                             if selected.contains(leader.id) { selected.remove(leader.id) }
-                            else { selected.insert(leader.id) }
+                            else if selected.count < 5 { selected.insert(leader.id) }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading) {
@@ -138,106 +132,150 @@ private struct CreateDeliberationSheet: View {
                     }
                 }
                 Section {
-                    Label("每个 Leader 每轮最多一条发言；单条最多 4 KiB。模型收到发言不会触发自由广播。", systemImage: "gauge.with.dots.needle.33percent")
-                    Label("Watcher 负责推进阶段，表决结果由 Rust 状态机按 60% 法定人数与 2/3 通过门槛计算。", systemImage: "checkmark.seal")
+                    Label("你每发一条消息，每个在线 Leader 最多回复一次。Leader 回复不会再次触发其他 Leader。", systemImage: "arrow.triangle.branch")
+                    Label("房间默认保留 200 次发言额度，单条最多 4 KiB；这些限制只负责防止流量爆炸。", systemImage: "gauge.with.dots.needle.33percent")
                 }
                 .font(.footnote).foregroundStyle(.secondary)
             }
-            .navigationTitle("新建有界协商")
+            .navigationTitle("新建群聊")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("开会") {
-                        model.createRoom(topic: topic, goal: goal, participantIDs: Array(selected), maxRounds: maxRounds)
+                    Button("创建") {
+                        model.createRoom(name: name, description: description, participantIDs: Array(selected))
                         dismiss()
                     }
                     .fontWeight(.semibold).disabled(!canCreate)
                 }
             }
             .onAppear {
-                if selected.isEmpty { selected = Set(model.leaders.prefix(5).map(\.id)) }
+                if selected.isEmpty { selected = Set(chatLeaders.prefix(5).map(\.id)) }
             }
         }
     }
 }
 
-private struct DeliberationDetailView: View {
+private struct ChatDetailView: View {
     @EnvironmentObject private var model: AppModel
     let roomID: String
+    @State private var draft = ""
 
-    private var room: DeliberationRoom? { model.rooms.first { $0.id == roomID } }
+    private var room: ChatRoom? { model.rooms.first { $0.id == roomID } }
 
     var body: some View {
         Group {
             if let room {
-                List {
-                    Section("目标") {
-                        Text(room.goal)
-                        LabeledContent("阶段", value: room.phaseTitle)
-                        LabeledContent("发言席", value: "\(room.maxSpeakers) / \(room.participants.count)")
-                        LabeledContent("单条上限", value: ByteCountFormatter.string(fromByteCount: Int64(room.maxMessageBytes), countStyle: .file))
-                    }
-                    if let decision = room.decision {
-                        Section("决议证书") {
-                            Label(decision.outcome == "approve" ? "提案通过" : "提案未通过",
-                                  systemImage: decision.outcome == "approve" ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                .font(.headline).foregroundStyle(decision.outcome == "approve" ? .green : .red)
-                            LabeledContent("投票", value: "\(decision.cast) / \(decision.eligible)")
-                            LabeledContent("赞成 / 反对 / 弃权", value: "\(decision.approvals) / \(decision.rejections) / \(decision.abstentions)")
-                            LabeledContent("法定人数", value: decision.quorumReached ? "达到" : "未达到")
-                            LabeledContent("通过门槛", value: decision.approvalReached ? "达到" : "未达到")
-                        }
-                    }
-                    Section("发言记录") {
-                        if room.contributions.isEmpty {
-                            Text("正在等待本轮 Leader 发言……").foregroundStyle(.secondary)
-                        } else {
-                            ForEach(room.contributions) { item in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        Text(model.leaders.first(where: { $0.id == item.authorPeer })?.name ?? String(item.authorPeer.prefix(12)))
-                                            .font(.subheadline.bold())
-                                        Spacer()
-                                        Text(item.kind.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Text(item.body).font(.subheadline)
-                                    Text("round \(item.round) · confidence \(Int(item.confidence * 100))%")
-                                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ChatRoomHeader(room: room)
+                            if room.messages.isEmpty {
+                                ContentUnavailableView(
+                                    "开始聊天",
+                                    systemImage: "bubble.left",
+                                    description: Text("发一条消息，房间里的 Leader 会各自判断是否需要回应。")
+                                )
+                                .padding(.top, 56)
+                            } else {
+                                ForEach(room.messages) { message in
+                                    ChatBubble(
+                                        message: message,
+                                        senderName: senderName(message)
+                                    )
+                                    .id(message.id)
                                 }
-                                .padding(.vertical, 4)
                             }
                         }
+                        .padding(.horizontal)
+                        .padding(.bottom, 12)
                     }
-                    if room.phase != .closed {
-                        Section {
-                            Button {
-                                model.advanceRoom(room.id)
-                            } label: {
-                                Label(nextTitle(room), systemImage: "arrow.right.circle.fill")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent).tint(MeshTheme.indigo)
-                        } footer: {
-                            Text("推进后不会回退。达到最大轮数后进入表决，再推进一次即关闭并生成决议证书。")
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .onChange(of: room.messages.count) {
+                        if let id = room.messages.last?.id {
+                            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
                         }
                     }
                 }
-                .navigationTitle(room.topic)
+                .safeAreaInset(edge: .bottom) { composer(room) }
+                .navigationTitle(room.name)
                 .navigationBarTitleDisplayMode(.inline)
             } else {
-                ContentUnavailableView("协商室不可用", systemImage: "exclamationmark.triangle")
+                ContentUnavailableView("群聊不可用", systemImage: "exclamationmark.triangle")
             }
         }
     }
 
-    private func nextTitle(_ room: DeliberationRoom) -> String {
-        switch room.phase {
-        case .capability: return "结束能力申报，开始讨论"
-        case .deliberation where room.round < room.maxRounds: return "进入下一轮"
-        case .deliberation: return "结束讨论，开始表决"
-        case .vote: return "关闭并生成决议"
-        case .closed: return "已关闭"
+    private func senderName(_ message: ChatMessage) -> String {
+        if message.authorRole == .watcher { return model.nodeName }
+        return model.leaders.first(where: { $0.id == message.authorPeer })?.name
+            ?? String(message.authorPeer.prefix(12))
+    }
+
+    private func composer(_ room: ChatRoom) -> some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("发消息给 Leader…", text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+            Button {
+                let message = draft
+                draft = ""
+                model.sendChatMessage(message, roomID: room.id)
+            } label: {
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+            }
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      || model.isSending || !room.isOpen || room.remainingTurns == 0)
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+    }
+}
+
+private struct ChatRoomHeader: View {
+    let room: ChatRoom
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "person.3.fill")
+                .font(.title2).foregroundStyle(MeshTheme.indigo)
+                .frame(width: 48, height: 48)
+                .background(MeshTheme.indigo.opacity(0.12), in: Circle())
+            if !room.description.isEmpty {
+                Text(room.description).font(.subheadline).multilineTextAlignment(.center)
+            }
+            Text("\(room.participants.count) 位 Leader · 每次最多 \(room.maxRespondersPerTurn) 条回复 · 剩余 \(room.remainingTurns) 次")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 18)
+    }
+}
+
+private struct ChatBubble: View {
+    let message: ChatMessage
+    let senderName: String
+
+    var body: some View {
+        if message.authorRole == .system {
+            Text(message.body).font(.caption).foregroundStyle(.secondary)
+                .padding(.vertical, 4).frame(maxWidth: .infinity)
+        } else {
+            HStack {
+                if message.authorRole == .watcher { Spacer(minLength: 54) }
+                VStack(alignment: message.authorRole == .watcher ? .trailing : .leading, spacing: 4) {
+                    Text(senderName).font(.caption).foregroundStyle(.secondary)
+                    Text(message.body)
+                        .font(.body)
+                        .foregroundStyle(message.authorRole == .watcher ? Color.white : Color.primary)
+                        .padding(.horizontal, 13).padding(.vertical, 9)
+                        .background(message.authorRole == .watcher ? MeshTheme.indigo : MeshTheme.card,
+                                    in: RoundedRectangle(cornerRadius: 17))
+                    Text(message.createdAt.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                if message.authorRole != .watcher { Spacer(minLength: 54) }
+            }
         }
     }
 }
@@ -839,7 +877,7 @@ private struct SettingsView: View {
             Section {
                 LabeledContent("协议", value: "mesh-watcher/1")
                 LabeledContent("任务兼容", value: "dsh-leader/1")
-                LabeledContent("版本", value: "0.1.2")
+                LabeledContent("版本", value: "0.2.0")
             } header: { Text("关于") } footer: {
                 Text("DeepSeek Agent Mesh · sovereign leaders, direct coordination")
             }

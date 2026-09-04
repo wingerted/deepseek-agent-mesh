@@ -13,7 +13,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var status: [String: Any] = [:]
     @Published private(set) var leaders: [LeaderPeer] = []
     @Published private(set) var events: [OperatorEvent]
-    @Published private(set) var rooms: [DeliberationRoom] = []
+    @Published private(set) var rooms: [ChatRoom] = []
     @Published private(set) var lastRefresh: Date?
     @Published var errorMessage: String?
 
@@ -195,51 +195,51 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createRoom(topic: String, goal: String, participantIDs: [String], maxRounds: Int = 2) {
+    func createRoom(name: String, description: String, participantIDs: [String]) {
         let selected = leaders.filter { participantIDs.contains($0.id) }
-        guard isRunning, !topic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !selected.isEmpty else { return }
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isRunning, !cleanName.isEmpty, !selected.isEmpty else { return }
         Task {
             do {
                 let contract: [String: Any] = [
-                    "topic": topic,
-                    "goal": goal,
+                    "name": cleanName,
+                    "description": cleanDescription,
                     "participants": selected.map(\.id),
-                    "max_rounds": max(1, min(8, maxRounds)),
-                    "max_speakers": min(5, selected.count),
-                    "messages_per_leader_per_round": 1,
+                    "max_turns": 200,
+                    "max_responders_per_turn": min(5, selected.count),
                     "max_message_bytes": 4096,
-                    "max_total_messages": max(8, selected.count * (maxRounds + 2)),
-                    "quorum_numerator": 3,
-                    "quorum_denominator": 5,
-                    "approval_numerator": 2,
-                    "approval_denominator": 3,
+                    "max_total_messages": 2048,
                 ]
-                guard let value = try await meshCall("room.create", params: ["contract": contract]) as? [String: Any],
-                      let room = DeliberationRoom.parse(value) else {
-                    throw MeshBridgeError.message("无法解析新协商室")
+                guard let value = try await meshCall("chat.create", params: ["contract": contract]) as? [String: Any],
+                      let room = ChatRoom.parse(value) else {
+                    throw MeshBridgeError.message("无法解析新群聊")
                 }
                 upsertRoom(room)
-                await broadcastPrompt(room, type: "room_open")
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
     }
 
-    func advanceRoom(_ roomID: String) {
+    func sendChatMessage(_ body: String, roomID: String) {
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isRunning, !isSending, !text.isEmpty,
+              let existing = rooms.first(where: { $0.id == roomID }), existing.isOpen else { return }
+        isSending = true
         Task {
             do {
-                guard let value = try await meshCall("room.advance", params: ["room_id": roomID]) as? [String: Any],
-                      let room = DeliberationRoom.parse(value) else {
-                    throw MeshBridgeError.message("无法解析协商状态")
+                guard let value = try await meshCall("chat.post", params: ["room_id": roomID, "body": text]) as? [String: Any],
+                      let room = ChatRoom.parse(value),
+                      let prompt = room.messages.last else {
+                    throw MeshBridgeError.message("无法解析群聊消息")
                 }
                 upsertRoom(room)
-                if room.phase != .closed { await broadcastPrompt(room, type: "round_prompt") }
+                await broadcastChatPrompt(room, prompt: prompt)
             } catch {
                 errorMessage = error.localizedDescription
             }
+            isSending = false
         }
     }
 
@@ -275,8 +275,8 @@ final class AppModel: ObservableObject {
             }
             let inbox = (try await meshCall("inbox.list", params: ["limit": 100])) as? [[String: Any]] ?? []
             for envelope in inbox { await ingest(envelope) }
-            let roomValues = (try await meshCall("room.list")) as? [[String: Any]] ?? []
-            rooms = roomValues.compactMap(DeliberationRoom.parse)
+            let roomValues = (try await meshCall("chat.list")) as? [[String: Any]] ?? []
+            rooms = roomValues.compactMap(ChatRoom.parse)
             lastRefresh = .now
         } catch {
             let message = error.localizedDescription
@@ -311,16 +311,16 @@ final class AppModel: ObservableObject {
         let fromPeer = envelope["from_peer"] as? String ?? ""
         let peerName = leaders.first(where: { $0.id == fromPeer })?.name ?? shortPeerID(fromPeer)
         let payload = envelope["payload"] as? [String: Any] ?? [:]
-        if kind == "message", payload["protocol"] as? String == "mesh-deliberation/1" {
-            if payload["type"] as? String == "room_submission" {
+        if kind == "message", payload["protocol"] as? String == "mesh-chat/1" {
+            if payload["type"] as? String == "chat_reply" {
                 do {
-                    guard let value = try await meshCall("room.ingest", params: ["envelope": envelope]) as? [String: Any],
-                          let room = DeliberationRoom.parse(value) else {
+                    guard let value = try await meshCall("chat.ingest", params: ["envelope": envelope]) as? [String: Any],
+                          let room = ChatRoom.parse(value) else {
                         throw MeshBridgeError.message("无法解析 Leader 发言")
                     }
                     upsertRoom(room)
                 } catch {
-                    errorMessage = "协商发言被拒绝：\(error.localizedDescription)"
+                    errorMessage = "群聊消息被拒绝：\(error.localizedDescription)"
                 }
             }
             _ = try? await meshCall("inbox.ack", params: ["id": envelopeID])
@@ -410,43 +410,48 @@ final class AppModel: ObservableObject {
         persistHistory()
     }
 
-    private func upsertRoom(_ room: DeliberationRoom) {
+    private func upsertRoom(_ room: ChatRoom) {
         rooms.removeAll { $0.id == room.id }
         rooms.insert(room, at: 0)
     }
 
-    private func broadcastPrompt(_ room: DeliberationRoom, type: String) async {
+    private func broadcastChatPrompt(_ room: ChatRoom, prompt: ChatMessage) async {
         let known = Dictionary(uniqueKeysWithValues: leaders.map { ($0.id, $0) })
-        let recent = room.contributions.suffix(8).map { contribution in
-            "\(shortPeerID(contribution.authorPeer)): \(contribution.body)"
+        let recent = room.messages.dropLast().suffix(12).map { message in
+            let name = message.authorRole == .watcher
+                ? nodeName
+                : (known[message.authorPeer]?.name ?? shortPeerID(message.authorPeer))
+            return "\(name): \(message.body)"
         }.joined(separator: "\n")
         let contract: [String: Any] = [
-            "topic": room.topic,
-            "goal": room.goal,
+            "name": room.name,
+            "description": room.description,
             "participants": room.participants,
-            "max_rounds": room.maxRounds,
-            "max_speakers": room.maxSpeakers,
+            "max_turns": room.maxTurns,
+            "max_responders_per_turn": room.maxRespondersPerTurn,
             "max_message_bytes": room.maxMessageBytes,
         ]
-        for peerID in room.participants where known[peerID] != nil {
+        let recipients = room.participants.filter { known[$0] != nil }.prefix(room.maxRespondersPerTurn)
+        for peerID in recipients {
             do {
                 _ = try await meshCall("send", params: [
                     "peer_id": peerID,
                     "kind": "message",
                     "payload": [
-                        "protocol": "mesh-deliberation/1",
-                        "type": type,
+                        "protocol": "mesh-chat/1",
+                        "type": "chat_prompt",
                         "room_id": room.id,
-                        "phase": room.phase.rawValue,
-                        "round": room.round,
+                        "message_id": prompt.id,
+                        "turn": room.turn,
+                        "text": prompt.body,
                         "contract": contract,
-                        "summary": recent,
+                        "context": recent,
                         "origin_role": "watcher",
                     ],
                     "ttl_seconds": 3600,
                 ])
             } catch {
-                errorMessage = "无法向 \(known[peerID]?.name ?? shortPeerID(peerID)) 发出本轮邀请：\(error.localizedDescription)"
+                errorMessage = "无法向 \(known[peerID]?.name ?? shortPeerID(peerID)) 发送群聊消息：\(error.localizedDescription)"
             }
         }
     }

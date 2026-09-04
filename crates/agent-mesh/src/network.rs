@@ -30,7 +30,7 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    deliberation::{DeliberationRoom, RoomContract, RoomStore},
+    chat::{ChatContract, ChatRoom, ChatStore},
     envelope::{Envelope, EnvelopeKind},
     ipc::{ControlFile, RpcRequest, RpcResponse},
     mailbox::Mailbox,
@@ -1223,17 +1223,23 @@ struct FetchParams {
 }
 
 #[derive(Debug, Deserialize)]
-struct RoomCreateParams {
-    contract: RoomContract,
+struct ChatCreateParams {
+    contract: ChatContract,
 }
 
 #[derive(Debug, Deserialize)]
-struct RoomIdParams {
+struct ChatIdParams {
     room_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
-struct RoomIngestParams {
+struct ChatPostParams {
+    room_id: Uuid,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatIngestParams {
     envelope: Envelope,
 }
 
@@ -1278,7 +1284,7 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
         allow_source_delete,
     } = options;
     std::fs::create_dir_all(&state_dir)?;
-    let rooms = RoomStore::open(state_dir.join("rooms"))?;
+    let chats = ChatStore::open(state_dir.join("chats"))?;
     let token = Uuid::new_v4().simple().to_string();
     let mut node = MeshNode::new(node_options).await?;
     let listener = TcpListener::bind(control_listen).await?;
@@ -1463,52 +1469,65 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
-                    "room.create" => {
-                        let response = serde_json::from_value::<RoomCreateParams>(command.request.params)
+                    "chat.create" => {
+                        let response = serde_json::from_value::<ChatCreateParams>(command.request.params)
                             .map_err(anyhow::Error::from)
-                            .and_then(|params| DeliberationRoom::new(
+                            .and_then(|params| ChatRoom::new(
                                 node.advertisement.peer_id.clone(),
                                 params.contract,
                             ))
                             .and_then(|room| {
-                                rooms.create(&room)?;
+                                chats.create(&room)?;
                                 Ok(room)
                             })
                             .map(|room| RpcResponse::success(json!(room)))
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
-                    "room.list" => {
-                        let response = rooms.list()
+                    "chat.list" => {
+                        let response = chats.list()
                             .map(|items| RpcResponse::success(json!(items)))
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
-                    "room.get" => {
-                        let response = serde_json::from_value::<RoomIdParams>(command.request.params)
+                    "chat.get" => {
+                        let response = serde_json::from_value::<ChatIdParams>(command.request.params)
                             .map_err(anyhow::Error::from)
-                            .and_then(|params| rooms.get(params.room_id))
+                            .and_then(|params| chats.get(params.room_id))
                             .map(|room| RpcResponse::success(json!(room)))
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
-                    "room.advance" => {
-                        let response = serde_json::from_value::<RoomIdParams>(command.request.params)
+                    "chat.post" => {
+                        let response = serde_json::from_value::<ChatPostParams>(command.request.params)
                             .map_err(anyhow::Error::from)
                             .and_then(|params| {
-                                let mut room = rooms.get(params.room_id)?;
-                                room.advance(&node.advertisement.peer_id)?;
-                                rooms.save(&room)?;
+                                let mut room = chats.get(params.room_id)?;
+                                room.post(&node.advertisement.peer_id, params.body)?;
+                                chats.save(&room)?;
                                 Ok(room)
                             })
                             .map(|room| RpcResponse::success(json!(room)))
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
-                    "room.ingest" => {
-                        let response = serde_json::from_value::<RoomIngestParams>(command.request.params)
+                    "chat.close" => {
+                        let response = serde_json::from_value::<ChatIdParams>(command.request.params)
                             .map_err(anyhow::Error::from)
-                            .and_then(|params| rooms.ingest_payload(
+                            .and_then(|params| {
+                                let mut room = chats.get(params.room_id)?;
+                                room.close(&node.advertisement.peer_id)?;
+                                chats.save(&room)?;
+                                Ok(room)
+                            })
+                            .map(|room| RpcResponse::success(json!(room)))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "chat.ingest" => {
+                        let response = serde_json::from_value::<ChatIngestParams>(command.request.params)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|params| chats.ingest_payload(
                                 params.envelope.id,
                                 &params.envelope.from_peer,
                                 &params.envelope.payload,

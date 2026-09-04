@@ -1,4 +1,4 @@
-pub mod deliberation;
+pub mod chat;
 pub mod envelope;
 pub mod identity;
 pub mod ipc;

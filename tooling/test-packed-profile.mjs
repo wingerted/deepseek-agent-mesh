@@ -15,8 +15,8 @@ const env = { ...process.env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' }
 
 try {
   for (const archive of [
-    'dsh-agent-mesh-0.1.2.tgz',
-    'dsh-agent-mesh-web-0.1.2.tgz',
+    'dsh-agent-mesh-0.2.0.tgz',
+    'dsh-agent-mesh-web-0.2.0.tgz',
   ]) {
     run(['plugin', '--profile', 'web', 'add', join(root, 'artifacts', archive)])
   }

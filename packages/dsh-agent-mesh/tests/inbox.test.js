@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { apply, deliberationPrompt, isDeliberationPrompt, senderRoleLabel } from '../inbox.js'
+import { apply, chatPrompt, isChatPrompt, senderRoleLabel } from '../inbox.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -10,28 +10,29 @@ test('classifies iOS watcher metadata without granting Leader authority', () => 
   assert.equal(senderRoleLabel({ payload: {} }), 'Peer')
 })
 
-test('recognizes bounded deliberation prompts and tells the Leader to emit once', () => {
+test('recognizes bounded chat prompts and gives the Leader one natural reply slot', () => {
   const envelope = {
-    id: 'round-a', kind: 'message', from_peer: 'watcher',
+    id: 'turn-a', kind: 'message', from_peer: 'watcher',
     payload: {
-      protocol: 'mesh-deliberation/1', type: 'round_prompt', room_id: 'room-a',
-      phase: 'vote', round: 2,
-      contract: { topic: 'Choose transport', goal: 'Decision', max_rounds: 2, max_message_bytes: 1024 },
+      protocol: 'mesh-chat/1', type: 'chat_prompt', room_id: 'room-a', message_id: 'message-a',
+      turn: 2, text: 'What can this node contribute?',
+      contract: { name: 'Mesh lounge', max_turns: 100, max_message_bytes: 1024, participants: ['local-peer'] },
     },
   }
-  assert.equal(isDeliberationPrompt(envelope), true)
-  assert.match(deliberationPrompt(envelope), /APPROVE, REJECT, or ABSTAIN/)
-  assert.match(deliberationPrompt(envelope), /emit only the final bounded contribution/)
+  assert.equal(isChatPrompt(envelope), true)
+  assert.match(chatPrompt(envelope), /Watcher says/)
+  assert.match(chatPrompt(envelope), /one external reply/)
 })
 
-test('a deliberation slot produces exactly one structured reply to its facilitator', async () => {
+test('a chat slot produces exactly one reply to its host', async () => {
   const prompt = {
-    id: 'round-a', kind: 'message', from_peer: 'facilitator',
+    id: 'turn-a', kind: 'message', from_peer: 'host',
     payload: {
-      protocol: 'mesh-deliberation/1', type: 'room_open',
-      room_id: '7bc46428-1533-466c-8c3b-d7e9090cb440', phase: 'capability', round: 0,
+      protocol: 'mesh-chat/1', type: 'chat_prompt',
+      room_id: '7bc46428-1533-466c-8c3b-d7e9090cb440', message_id: 'message-a', turn: 1,
+      text: 'Introduce your useful capabilities.',
       contract: {
-        topic: 'Choose transport', goal: 'Decide once', max_rounds: 2,
+        name: 'Mesh lounge', max_turns: 100,
         max_message_bytes: 1024, participants: ['local-peer'],
       },
     },
@@ -72,11 +73,12 @@ test('a deliberation slot produces exactly one structured reply to its facilitat
   await tick()
 
   assert.equal(sent.length, 1)
-  assert.equal(sent[0].peer_id, 'facilitator')
-  assert.equal(sent[0].payload.type, 'room_submission')
-  assert.equal(sent[0].payload.contribution.kind, 'capability_bid')
-  assert.equal(sent[0].payload.contribution.body, 'I can review transport safety.')
-  assert.deepEqual(acked, ['round-a'])
+  assert.equal(sent[0].peer_id, 'host')
+  assert.equal(sent[0].payload.type, 'chat_reply')
+  assert.equal(sent[0].payload.turn, 1)
+  assert.equal(sent[0].payload.reply_to, 'message-a')
+  assert.equal(sent[0].payload.body, 'I can review transport safety.')
+  assert.deepEqual(acked, ['turn-a'])
   await dispose()
 })
 

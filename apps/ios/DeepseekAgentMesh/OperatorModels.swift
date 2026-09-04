@@ -9,11 +9,13 @@ struct LeaderPeer: Identifiable, Codable, Hashable {
     let zone: String
     let roles: [String]
     let workspaces: [String]
+    let protocols: [String]
     let load: Double
     let teamEnabled: Bool
     let maxParallelTasks: Int
 
     var isResponsive: Bool { rttMilliseconds < 1_500 }
+    var supportsChat: Bool { protocols.contains("mesh-chat/1") }
     var location: String { [region, zone].filter { !$0.isEmpty }.joined(separator: " · ") }
     var shortID: String { Self.shortened(id) }
 
@@ -34,6 +36,7 @@ struct LeaderPeer: Identifiable, Codable, Hashable {
             zone: capabilities["zone"] as? String ?? "",
             roles: (leader["roles"] as? [String] ?? []).sorted(),
             workspaces: (leader["workspace_aliases"] as? [String] ?? []).sorted(),
+            protocols: protocols.sorted(),
             load: (capabilities["load"] as? NSNumber)?.doubleValue ?? 0,
             teamEnabled: leader["team_enabled"] as? Bool ?? false,
             maxParallelTasks: (leader["max_parallel_tasks"] as? NSNumber)?.intValue ?? 1
@@ -143,108 +146,76 @@ struct OperatorHistoryStore {
     }
 }
 
-enum DeliberationPhase: String, Codable {
-    case capability
-    case deliberation
-    case vote
-    case closed
-
-    var title: String {
-        switch self {
-        case .capability: "能力申报"
-        case .deliberation: "讨论"
-        case .vote: "表决"
-        case .closed: "已决议"
-        }
-    }
+enum ChatAuthorRole: String, Hashable {
+    case watcher
+    case leader
+    case system
 }
 
-struct RoomContribution: Identifiable, Hashable {
+struct ChatMessage: Identifiable, Hashable {
     let id: String
     let authorPeer: String
-    let round: Int
+    let authorRole: ChatAuthorRole
     let kind: String
-    let confidence: Double
+    let turn: Int
     let body: String
-    let vote: String?
+    let replyTo: String?
+    let createdAt: Date
 
-    static func parse(_ value: [String: Any]) -> RoomContribution? {
+    static func parse(_ value: [String: Any]) -> ChatMessage? {
         guard let id = value["id"] as? String,
-              let author = value["author_peer"] as? String else { return nil }
-        return RoomContribution(
+              let author = value["author_peer"] as? String,
+              let roleValue = value["author_role"] as? String,
+              let role = ChatAuthorRole(rawValue: roleValue) else { return nil }
+        let createdAt = (value["created_at"] as? String)
+            .flatMap { ISO8601DateFormatter().date(from: $0) } ?? .now
+        return ChatMessage(
             id: id,
             authorPeer: author,
-            round: (value["round"] as? NSNumber)?.intValue ?? 0,
+            authorRole: role,
             kind: value["kind"] as? String ?? "unknown",
-            confidence: (value["confidence"] as? NSNumber)?.doubleValue ?? 0,
+            turn: (value["turn"] as? NSNumber)?.intValue ?? 0,
             body: value["body"] as? String ?? "",
-            vote: value["vote"] as? String
+            replyTo: value["reply_to"] as? String,
+            createdAt: createdAt
         )
     }
 }
 
-struct RoomDecision: Hashable {
-    let outcome: String
-    let cast: Int
-    let eligible: Int
-    let approvals: Int
-    let rejections: Int
-    let abstentions: Int
-    let quorumReached: Bool
-    let approvalReached: Bool
-
-    static func parse(_ value: [String: Any]?) -> RoomDecision? {
-        guard let value, let outcome = value["outcome"] as? String else { return nil }
-        return RoomDecision(
-            outcome: outcome,
-            cast: (value["cast"] as? NSNumber)?.intValue ?? 0,
-            eligible: (value["eligible"] as? NSNumber)?.intValue ?? 0,
-            approvals: (value["approvals"] as? NSNumber)?.intValue ?? 0,
-            rejections: (value["rejections"] as? NSNumber)?.intValue ?? 0,
-            abstentions: (value["abstentions"] as? NSNumber)?.intValue ?? 0,
-            quorumReached: value["quorum_reached"] as? Bool ?? false,
-            approvalReached: value["approval_reached"] as? Bool ?? false
-        )
-    }
-}
-
-struct DeliberationRoom: Identifiable, Hashable {
+struct ChatRoom: Identifiable, Hashable {
     let id: String
-    let facilitatorPeer: String
-    let topic: String
-    let goal: String
+    let hostPeer: String
+    let name: String
+    let description: String
     let participants: [String]
-    let phase: DeliberationPhase
-    let round: Int
-    let maxRounds: Int
-    let maxSpeakers: Int
+    let isOpen: Bool
+    let turn: Int
+    let maxTurns: Int
+    let maxRespondersPerTurn: Int
     let maxMessageBytes: Int
-    let contributions: [RoomContribution]
-    let decision: RoomDecision?
+    let maxTotalMessages: Int
+    let messages: [ChatMessage]
 
-    var phaseTitle: String {
-        phase == .deliberation ? "第 \(round)/\(maxRounds) 轮" : phase.title
-    }
+    var remainingTurns: Int { max(0, maxTurns - turn) }
+    var lastMessage: ChatMessage? { messages.last }
 
-    static func parse(_ value: [String: Any]) -> DeliberationRoom? {
+    static func parse(_ value: [String: Any]) -> ChatRoom? {
         guard let id = value["id"] as? String,
-              let facilitator = value["facilitator_peer"] as? String,
-              let contract = value["contract"] as? [String: Any],
-              let phaseText = value["phase"] as? String,
-              let phase = DeliberationPhase(rawValue: phaseText) else { return nil }
-        return DeliberationRoom(
+              let host = value["host_peer"] as? String,
+              let contract = value["contract"] as? [String: Any] else { return nil }
+        return ChatRoom(
             id: id,
-            facilitatorPeer: facilitator,
-            topic: contract["topic"] as? String ?? "未命名协商",
-            goal: contract["goal"] as? String ?? "",
+            hostPeer: host,
+            name: contract["name"] as? String ?? "未命名群聊",
+            description: contract["description"] as? String ?? "",
             participants: (contract["participants"] as? [String] ?? []).sorted(),
-            phase: phase,
-            round: (value["round"] as? NSNumber)?.intValue ?? 0,
-            maxRounds: (contract["max_rounds"] as? NSNumber)?.intValue ?? 1,
-            maxSpeakers: (contract["max_speakers"] as? NSNumber)?.intValue ?? 1,
+            isOpen: value["open"] as? Bool ?? false,
+            turn: (value["turn"] as? NSNumber)?.intValue ?? 0,
+            maxTurns: (contract["max_turns"] as? NSNumber)?.intValue ?? 100,
+            maxRespondersPerTurn: (contract["max_responders_per_turn"] as? NSNumber)?.intValue ?? 1,
             maxMessageBytes: (contract["max_message_bytes"] as? NSNumber)?.intValue ?? 4096,
-            contributions: (value["contributions"] as? [[String: Any]] ?? []).compactMap(RoomContribution.parse),
-            decision: RoomDecision.parse(value["decision"] as? [String: Any])
+            maxTotalMessages: (contract["max_total_messages"] as? NSNumber)?.intValue ?? 512,
+            messages: (value["messages"] as? [[String: Any]] ?? []).compactMap(ChatMessage.parse)
         )
     }
 }
