@@ -1,6 +1,6 @@
 {
   "name": "@agent-mesh/rpc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Authenticated local IPC client for the agent-mesh daemon",
   "type": "module",
   "exports": {

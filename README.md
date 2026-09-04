@@ -86,8 +86,8 @@ pixi global install \
 GitHub Actions 在 tag `v<recipe-version>` 上用标准免费 runner 并行构建 `linux-64` 与 `osx-arm64`，临时 artifact 仅保留 3 天，长期文件和 `SHA256SUMS` 发布到 GitHub Release。也可以在 Actions 页面手动运行 `Release Conda packages`：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 第一台 Leader 在 WireGuard 地址上创建网络并启动；终端会打印 Harness Web URL 和一枚 15 分钟、单次使用的 `mesh1:` 邀请码：

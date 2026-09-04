@@ -839,7 +839,7 @@ private struct SettingsView: View {
             Section {
                 LabeledContent("协议", value: "mesh-watcher/1")
                 LabeledContent("任务兼容", value: "dsh-leader/1")
-                LabeledContent("版本", value: "0.1.0")
+                LabeledContent("版本", value: "0.1.2")
             } header: { Text("关于") } footer: {
                 Text("DeepSeek Agent Mesh · sovereign leaders, direct coordination")
             }
