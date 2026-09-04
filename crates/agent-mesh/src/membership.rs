@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const JOIN_PREFIX: &str = "mesh1:";
+const JOIN_HINT_PREFIX: &str = "mesh1h:";
 const MEMBER_LIFETIME_SECS: i64 = 365 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +46,12 @@ pub struct JoinTicket {
     pub token: String,
     pub expires_at: i64,
     pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinHint {
+    pub bootstrap: Multiaddr,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +143,73 @@ impl JoinTicket {
     }
 }
 
+impl JoinHint {
+    pub fn from_ticket(ticket: &JoinTicket) -> Result<Self> {
+        let bootstrap = ticket
+            .bootstrap_addrs()?
+            .into_iter()
+            .find(|address| {
+                address
+                    .iter()
+                    .any(|part| matches!(part, libp2p::multiaddr::Protocol::Tcp(_)))
+            })
+            .or_else(|| ticket.bootstrap_addrs().ok()?.into_iter().next())
+            .ok_or_else(|| anyhow!("join ticket has no usable bootstrap address"))?;
+        Ok(Self {
+            bootstrap,
+            token: ticket.token.clone(),
+        })
+    }
+
+    pub fn decode(code: &str) -> Result<Self> {
+        let encoded = code
+            .trim()
+            .strip_prefix(JOIN_HINT_PREFIX)
+            .ok_or_else(|| anyhow!("join hint must start with {JOIN_HINT_PREFIX}"))?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .context("join hint is not valid base64url")?;
+        if bytes.len() < 19 || bytes[0] != 1 {
+            bail!("unsupported or invalid join hint")
+        }
+        let address_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+        if bytes.len() != 3 + address_len + 16 {
+            bail!("invalid join hint length")
+        }
+        let bootstrap = Multiaddr::try_from(bytes[3..3 + address_len].to_vec())
+            .context("join hint contains an invalid bootstrap address")?;
+        if address_peer(&bootstrap).is_none() {
+            bail!("join hint bootstrap address has no peer ID")
+        }
+        let token = uuid::Uuid::from_slice(&bytes[3 + address_len..])?
+            .simple()
+            .to_string();
+        Ok(Self { bootstrap, token })
+    }
+
+    pub fn encode(&self) -> Result<String> {
+        if address_peer(&self.bootstrap).is_none() {
+            bail!("join hint bootstrap address has no peer ID")
+        }
+        let address = self.bootstrap.to_vec();
+        let address_len = u16::try_from(address.len()).context("bootstrap address is too long")?;
+        let token = uuid::Uuid::parse_str(&self.token).context("invalid join hint token")?;
+        let mut bytes = Vec::with_capacity(3 + address.len() + 16);
+        bytes.push(1);
+        bytes.extend_from_slice(&address_len.to_be_bytes());
+        bytes.extend_from_slice(&address);
+        bytes.extend_from_slice(token.as_bytes());
+        Ok(format!(
+            "{JOIN_HINT_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(bytes)
+        ))
+    }
+
+    pub fn issuer(&self) -> Result<PeerId> {
+        address_peer(&self.bootstrap).ok_or_else(|| anyhow!("join hint has no inviter peer ID"))
+    }
+}
+
 impl MembershipManager {
     pub fn open(
         state_dir: impl Into<PathBuf>,
@@ -214,6 +288,49 @@ impl MembershipManager {
             used_by: None,
         });
         self.write_invites(&database)?;
+        Ok(ticket)
+    }
+
+    pub fn resolve_invite(
+        &self,
+        identity: &identity::Keypair,
+        bootstrap: Vec<String>,
+        token: &str,
+    ) -> Result<JoinTicket> {
+        let state = self
+            .state
+            .as_ref()
+            .ok_or_else(|| anyhow!("this node has not initialized a membership root"))?;
+        if state.root_peer_id != self.local_peer.to_string() {
+            bail!("this node cannot resolve invitations")
+        }
+        if bootstrap.is_empty() {
+            bail!("inviter has no reachable bootstrap address")
+        }
+        let database = self.read_invites()?;
+        let now = Utc::now().timestamp();
+        let grant = database
+            .grants
+            .iter()
+            .find(|grant| grant.token_hash == token_hash(token))
+            .ok_or_else(|| anyhow!("unknown invitation"))?;
+        if grant.expires_at <= now {
+            bail!("invitation has expired")
+        }
+        if grant.used_by.is_some() {
+            bail!("invitation has already been used")
+        }
+        let mut ticket = JoinTicket {
+            version: 1,
+            network_id: self.network_id.clone(),
+            issuer_peer_id: self.local_peer.to_string(),
+            issuer_public_key: encode_public_key(&identity.public())?,
+            bootstrap,
+            token: token.to_owned(),
+            expires_at: grant.expires_at,
+            signature: String::new(),
+        };
+        ticket.signature = URL_SAFE_NO_PAD.encode(identity.sign(&ticket_payload(&ticket)?)?);
         Ok(ticket)
     }
 

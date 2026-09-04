@@ -14,6 +14,8 @@ git = ">=2.26"
 ripgrep = "*"
 jq = "*"
 rattler-build = "==0.75.0"
+rust-std-aarch64-apple-ios = "1.98.*"
+rust-std-aarch64-apple-ios-sim = "1.98.*"
 
 [tasks]
 bootstrap = "pnpm install --frozen-lockfile"
@@ -37,3 +39,5 @@ harness-dump = "node tooling/harness-profile.mjs dump"
 harness-web = "node tooling/harness-profile.mjs web"
 dsh-mesh = "node tooling/dsh-mesh.mjs"
 package-conda = "rattler-build build --recipe packaging/conda --output-dir artifacts/conda"
+ios-rust = "bash scripts/build-ios-rust.sh"
+ios-build-sim = { cmd = "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project apps/ios/DeepseekAgentMesh.xcodeproj -scheme DeepseekAgentMesh -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath apps/ios/build ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build", depends-on = ["ios-rust"] }

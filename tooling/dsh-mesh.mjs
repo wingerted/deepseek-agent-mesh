@@ -10,7 +10,8 @@ const scriptDir = dirname(fileURLToPath(import.meta.url))
 const sourceRoot = resolve(scriptDir, '..')
 
 export function parseJoinCode(code) {
-  if (!code?.startsWith('mesh1:')) throw new Error('join code must start with mesh1:')
+  if (code?.startsWith('mesh1h:')) return { version: 1, hint: true }
+  if (!code?.startsWith('mesh1:')) throw new Error('join code must start with mesh1h: or mesh1:')
   const ticket = JSON.parse(Buffer.from(code.slice(6), 'base64url').toString('utf8'))
   if (ticket.version !== 1 || !ticket.network_id || !Array.isArray(ticket.bootstrap)) {
     throw new Error('unsupported or invalid join code')
@@ -61,14 +62,14 @@ async function main(argv = process.argv.slice(2)) {
 
   if (command === 'join') {
     const code = options.positionals[0]
-    const ticket = parseJoinCode(code)
-    const target = firstIp(ticket.bootstrap)
+    parseJoinCode(code)
+    const joined = JSON.parse(runCapture(meshBin, ['--state-dir', stateDir, 'join', code]))
+    const target = firstIp(joined.bootstrap)
     const bind = chooseBindAddress(options.bind, target)
-    run(meshBin, ['--state-dir', stateDir, 'join', code])
     const config = createNodeConfig({
       bind,
-      networkId: ticket.network_id,
-      bootstrap: ticket.bootstrap,
+      networkId: joined.network_id,
+      bootstrap: joined.bootstrap,
       name: options.name,
     })
     writePrivateJson(configPath, config)
@@ -329,7 +330,7 @@ async function waitForFile(path, timeoutMs) {
 function printHelp() {
   process.stdout.write(`dsh-mesh - DeepSeek Harness Leader mesh\n\n`)
   process.stdout.write(`  dsh-mesh up --new [--bind IP]    create/start and print one invite\n`)
-  process.stdout.write(`  dsh-mesh join <mesh1:...>        join and start immediately\n`)
+  process.stdout.write(`  dsh-mesh join <mesh1h:...>       join and start immediately\n`)
   process.stdout.write(`  dsh-mesh invite [--ttl SEC]      print a one-use invite\n`)
   process.stdout.write(`  dsh-mesh status                   show local daemon status\n`)
   process.stdout.write(`  dsh-mesh peers                    show discovered peers\n`)

@@ -24,7 +24,7 @@ export const Config = z.object({
   egressMbps: z.number().default(100),
   idlePricePerGib: z.number().default(0),
   busyPricePerGib: z.number().default(0),
-  leaderProtocols: z.array(z.string()).default(['dsh-leader/1']),
+  leaderProtocols: z.array(z.string()).default(['dsh-leader/1', 'mesh-deliberation/1']),
   leaderRoles: z.array(z.string()).default(['general']),
   leaderWorkspaces: z.array(z.string()).default(['default']),
   leaderTeamEnabled: z.boolean().default(true),

@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     envelope::Envelope,
-    membership::MembershipCertificate,
+    membership::{JoinTicket, MembershipCertificate},
     model::{AgentAdvertisement, ObjectSummary},
 };
 
@@ -28,6 +28,9 @@ pub enum MeshRequest {
     JoinNetwork {
         token: String,
     },
+    ResolveInvite {
+        token: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +52,9 @@ pub enum MeshResponse {
     },
     NetworkJoined {
         certificate: MembershipCertificate,
+    },
+    InviteResolved {
+        ticket: Box<JoinTicket>,
     },
     Error {
         message: String,

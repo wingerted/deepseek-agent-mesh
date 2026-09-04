@@ -10,6 +10,7 @@
 
 ```text
 crates/agent-mesh/              Rust CLI、daemon、libp2p 与内容传输
+apps/ios/                       原生 iOS Mesh Watcher 与 Rust XCFramework 桥接
 packages/mesh-rpc/             daemon 回环控制协议的 Node client
 packages/dsh-agent-mesh/        Harness Leader、工具、inbox 与主动调度
 packages/dsh-agent-mesh-web/    Harness Web 状态、meta 与拓扑
@@ -46,6 +47,25 @@ pixi run pack
 
 开发链路由 Pixi、Cargo 和 pnpm 管理；远端节点推荐安装 Conda 包，不需要 checkout 本仓库或 DeepSeek Harness。
 
+## iOS Watcher
+
+iOS App 是一个直接加入网络的 Mesh Watcher：它把同一个 Rust `libp2p` 节点嵌入 App 进程，持有独立签名身份与 membership，可查看 Harness Leader 状态、发送消息、广播和派发任务。它广告 `node_role: watcher`，不会宣称 `dsh-leader/1` 能力，也不会加入任何 Leader 的 Agent Team。
+
+构建模拟器版本：
+
+```bash
+pixi run ios-build-sim
+open apps/ios/DeepseekAgentMesh.xcodeproj
+```
+
+真机加入方式、交互语义以及 iOS 后台运行边界见 [iOS README](apps/ios/README.md) 和 [iOS Operator UX](docs/ios-operator-ux.md)。
+
+## 有界 Leader 协商
+
+`mesh-deliberation/1` 把 Leader 群聊约束为能力申报、有限轮讨论、表决、关闭四个单向阶段。每个 Leader 可在本节点使用自己的 Agent Team 思考，但每个发言槽只向主持 Watcher 返回一条贡献；收到其他 Leader 的贡献不会自动回复。Rust reducer 强制参与者、轮次、发言人数、每 Leader 次数、单条字节数、总消息数以及精确的法定人数/通过比例，关闭后生成决议证书。
+
+iOS 的 **协商** Tab 可选择在线 Leader、设置目标和轮数、推进阶段并查看发言与最终证书。完整 wire payload、状态机和接收端防重放规则见 [Mesh Deliberation v1](spec/mesh-deliberation-v1.md)。
+
 ## 最简安装与组网
 
 发布方先构建 channel（当前机器会产生 `osx-arm64` 包）：
@@ -79,7 +99,7 @@ dsh-mesh up --new --bind 10.200.0.1 --name shanghai-leader
 第二台机器安装同一个包后，只需粘贴邀请码。`join` 会验证创始节点签名、推断到 bootstrap 的本机源地址、领取成员证书、安装两个 Harness 插件并立即启动：
 
 ```bash
-dsh-mesh join 'mesh1:...' --name beijing-leader
+dsh-mesh join 'mesh1h:...' --name beijing-leader
 ```
 
 路由推断不符合预期时显式指定 WireGuard 地址：

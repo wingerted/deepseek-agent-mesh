@@ -150,6 +150,7 @@ mod tests {
 
     fn capabilities(network: &str, egress: f64, price: f64) -> AgentCapabilities {
         AgentCapabilities {
+            node_role: crate::model::NodeRole::Worker,
             region: "cn-sh2".into(),
             zone: "a".into(),
             currency: "CNY".into(),

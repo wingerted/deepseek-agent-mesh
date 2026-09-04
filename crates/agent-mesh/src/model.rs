@@ -6,6 +6,17 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
 pub const ADVERTISEMENT_TTL_SECS: i64 = 90;
 
+/// Self-declared operating role used for routing and presentation only.
+/// Authentication and authorization continue to rely on peer identity and membership.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeRole {
+    Leader,
+    Watcher,
+    #[default]
+    Worker,
+}
+
 /// Aggregate capabilities offered by the sovereign Harness Leader on a node.
 /// Local teammates are deliberately not advertised as mesh members.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,6 +30,8 @@ pub struct LeaderCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentCapabilities {
+    #[serde(default)]
+    pub node_role: NodeRole,
     pub region: String,
     pub zone: String,
     pub currency: String,

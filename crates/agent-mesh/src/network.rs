@@ -8,9 +8,10 @@ use std::{
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use futures::StreamExt;
+#[cfg(not(target_os = "ios"))]
+use libp2p::mdns;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, gossipsub, identify, identity, kad,
-    mdns,
     multiaddr::Protocol,
     noise, ping, rendezvous,
     request_response::{self, OutboundRequestId, ProtocolSupport},
@@ -29,10 +30,11 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
+    deliberation::{DeliberationRoom, RoomContract, RoomStore},
     envelope::{Envelope, EnvelopeKind},
     ipc::{ControlFile, RpcRequest, RpcResponse},
     mailbox::Mailbox,
-    membership::{JoinTicket, MembershipManager},
+    membership::{JoinHint, JoinTicket, MembershipManager},
     model::{ADVERTISEMENT_TTL_SECS, AgentAdvertisement, AgentCapabilities, ObjectSummary},
     planner::{Candidate, OptimizeFor, RouteKind, TransferPlan, choose_best},
     protocol::{MeshRequest, MeshResponse, chunk_response},
@@ -46,11 +48,17 @@ struct Behaviour {
     request_response: request_response::cbor::Behaviour<MeshRequest, MeshResponse>,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
     gossipsub: gossipsub::Behaviour,
+    #[cfg(not(target_os = "ios"))]
     mdns: mdns::tokio::Behaviour,
     identify: identify::Behaviour,
     ping: ping::Behaviour,
     rendezvous_client: rendezvous::client::Behaviour,
     rendezvous_server: rendezvous::server::Behaviour,
+}
+
+#[derive(NetworkBehaviour)]
+struct JoinHintBehaviour {
+    request_response: request_response::cbor::Behaviour<MeshRequest, MeshResponse>,
 }
 
 pub struct NodeOptions {
@@ -106,15 +114,17 @@ impl MeshNode {
         let peer_id = options.keypair.public().to_peer_id();
         let identity = options.keypair.clone();
         let rendezvous_identity = options.keypair.clone();
-        let mut swarm = SwarmBuilder::with_existing_identity(options.keypair)
+        let builder = SwarmBuilder::with_existing_identity(options.keypair)
             .with_tokio()
             .with_tcp(
                 tcp::Config::default().nodelay(true),
                 noise::Config::new,
                 yamux::Config::default,
             )?
-            .with_quic()
-            .with_dns()?
+            .with_quic();
+        #[cfg(not(target_os = "ios"))]
+        let builder = builder.with_dns()?;
+        let mut swarm = builder
             .with_behaviour(|key| {
                 let gossipsub_config = gossipsub::ConfigBuilder::default()
                     .validation_mode(gossipsub::ValidationMode::Strict)
@@ -133,6 +143,7 @@ impl MeshNode {
                     ),
                     kademlia: kad::Behaviour::new(peer_id, kad::store::MemoryStore::new(peer_id)),
                     gossipsub,
+                    #[cfg(not(target_os = "ios"))]
                     mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?,
                     identify: identify::Behaviour::new(identify::Config::new(
                         "/agent-mesh/id/1".into(),
@@ -406,6 +417,20 @@ impl MeshNode {
                     },
                 }
             }
+            MeshRequest::ResolveInvite { token } => {
+                match self.membership.resolve_invite(
+                    &self.identity,
+                    self.advertisement.listen_addresses.clone(),
+                    &token,
+                ) {
+                    Ok(ticket) => MeshResponse::InviteResolved {
+                        ticket: Box::new(ticket),
+                    },
+                    Err(error) => MeshResponse::Error {
+                        message: error.to_string(),
+                    },
+                }
+            }
         };
         let _ = self
             .swarm
@@ -470,6 +495,7 @@ pub async fn serve(options: NodeOptions, allow_source_delete: bool) -> Result<()
                             .start_providing(provider_key);
                     }
                 }
+                #[cfg(not(target_os = "ios"))]
                 SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                     for (peer, address) in peers {
                         node.add_peer_address(peer, address.clone());
@@ -477,6 +503,7 @@ pub async fn serve(options: NodeOptions, allow_source_delete: bool) -> Result<()
                         let _ = node.swarm.dial(address.with(Protocol::P2p(peer)));
                     }
                 }
+                #[cfg(not(target_os = "ios"))]
                 SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
                     for (peer, _) in peers {
                         node.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer);
@@ -547,6 +574,7 @@ pub async fn discover(options: NodeOptions, seconds: u64) -> Result<Vec<PeerSnap
                 node.request_peer_snapshot(peer_id, &mut pending);
                 node.rendezvous_connected(peer_id);
             }
+            #[cfg(not(target_os = "ios"))]
             SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                 for (peer, address) in peers {
                     node.add_peer_address(peer, address.clone());
@@ -661,6 +689,83 @@ pub async fn join(options: NodeOptions, ticket: JoinTicket) -> Result<Value> {
         }
         MeshResponse::Error { message } => bail!("join rejected: {message}"),
         _ => bail!("inviter returned an invalid join response"),
+    }
+}
+
+pub async fn resolve_join_hint(keypair: identity::Keypair, hint: JoinHint) -> Result<JoinTicket> {
+    let expected_peer = hint.issuer()?;
+    let builder = SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default().nodelay(true),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
+        .with_quic();
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder.with_dns()?;
+    let mut swarm = builder
+        .with_behaviour(|_| JoinHintBehaviour {
+            request_response: request_response::cbor::Behaviour::new(
+                [(MESH_PROTOCOL, ProtocolSupport::Full)],
+                request_response::Config::default().with_request_timeout(Duration::from_secs(20)),
+            ),
+        })?
+        .build();
+    swarm.dial(hint.bootstrap.clone())?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut pending = None;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("timed out resolving join hint")
+        }
+        let event = timeout(remaining, swarm.next())
+            .await
+            .map_err(|_| anyhow!("timed out resolving join hint"))?
+            .ok_or_else(|| anyhow!("join hint connection ended"))?;
+        match event {
+            SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == expected_peer => {
+                if pending.is_none() {
+                    pending = Some(swarm.behaviour_mut().request_response.send_request(
+                        &peer_id,
+                        MeshRequest::ResolveInvite {
+                            token: hint.token.clone(),
+                        },
+                    ));
+                }
+            }
+            SwarmEvent::Behaviour(JoinHintBehaviourEvent::RequestResponse(
+                request_response::Event::Message {
+                    peer,
+                    message:
+                        request_response::Message::Response {
+                            request_id,
+                            response,
+                        },
+                    ..
+                },
+            )) if peer == expected_peer && pending == Some(request_id) => match response {
+                MeshResponse::InviteResolved { ticket } => {
+                    let ticket = *ticket;
+                    ticket.verify()?;
+                    if ticket.token != hint.token || ticket.issuer()? != expected_peer {
+                        bail!("join hint resolved to a different invitation")
+                    }
+                    return Ok(ticket);
+                }
+                MeshResponse::Error { message } => bail!("join hint rejected: {message}"),
+                _ => bail!("inviter returned an invalid hint response"),
+            },
+            SwarmEvent::Behaviour(JoinHintBehaviourEvent::RequestResponse(
+                request_response::Event::OutboundFailure {
+                    request_id, error, ..
+                },
+            )) if pending == Some(request_id) => {
+                bail!("failed resolving join hint: {error}")
+            }
+            _ => {}
+        }
     }
 }
 
@@ -811,6 +916,7 @@ async fn discover_with_node(
                 node.publish_advertisement();
                 node.rendezvous_connected(peer_id);
             }
+            #[cfg(not(target_os = "ios"))]
             SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                 for (peer, address) in peers {
                     node.add_peer_address(peer, address.clone());
@@ -1116,6 +1222,21 @@ struct FetchParams {
     request_source_delete: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct RoomCreateParams {
+    contract: RoomContract,
+}
+
+#[derive(Debug, Deserialize)]
+struct RoomIdParams {
+    room_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct RoomIngestParams {
+    envelope: Envelope,
+}
+
 fn default_envelope_ttl() -> u64 {
     3600
 }
@@ -1136,6 +1257,17 @@ fn default_discovery_seconds() -> u64 {
     5
 }
 
+async fn daemon_shutdown_signal() {
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    #[cfg(target_os = "ios")]
+    {
+        std::future::pending::<()>().await;
+    }
+}
+
 /// Run the long-lived node. The daemon exclusively owns the identity and Swarm;
 /// both the CLI and Harness plugin use the authenticated loopback control plane.
 pub async fn daemon(options: DaemonOptions) -> Result<()> {
@@ -1146,6 +1278,7 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
         allow_source_delete,
     } = options;
     std::fs::create_dir_all(&state_dir)?;
+    let rooms = RoomStore::open(state_dir.join("rooms"))?;
     let token = Uuid::new_v4().simple().to_string();
     let mut node = MeshNode::new(node_options).await?;
     let listener = TcpListener::bind(control_listen).await?;
@@ -1194,7 +1327,7 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = daemon_shutdown_signal() => {
                 let _ = std::fs::remove_file(state_dir.join("control.json"));
                 return Ok(())
             },
@@ -1217,6 +1350,11 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                     continue;
                 }
                 match command.request.method.as_str() {
+                    "shutdown" => {
+                        let _ = command.reply.send(RpcResponse::success(json!({"stopped":true})));
+                        let _ = std::fs::remove_file(state_dir.join("control.json"));
+                        return Ok(())
+                    }
                     "status" => {
                         let result = json!({
                             "version":1,
@@ -1250,7 +1388,8 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                             node.advertisement.listen_addresses.clone(),
                             ttl_seconds,
                         ).and_then(|ticket| Ok(json!({
-                            "join_code":ticket.encode()?,
+                            "join_code":JoinHint::from_ticket(&ticket)?.encode()?,
+                            "full_join_code":ticket.encode()?,
                             "expires_at":ticket.expires_at,
                             "network_id":ticket.network_id,
                             "issuer_peer_id":ticket.issuer_peer_id,
@@ -1321,6 +1460,60 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                             .and_then(|id| Uuid::parse_str(id).map_err(anyhow::Error::from))
                             .and_then(|id| node.mailbox.ack(id))
                             .map(|()| RpcResponse::success(json!({"acked":true})))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "room.create" => {
+                        let response = serde_json::from_value::<RoomCreateParams>(command.request.params)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|params| DeliberationRoom::new(
+                                node.advertisement.peer_id.clone(),
+                                params.contract,
+                            ))
+                            .and_then(|room| {
+                                rooms.create(&room)?;
+                                Ok(room)
+                            })
+                            .map(|room| RpcResponse::success(json!(room)))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "room.list" => {
+                        let response = rooms.list()
+                            .map(|items| RpcResponse::success(json!(items)))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "room.get" => {
+                        let response = serde_json::from_value::<RoomIdParams>(command.request.params)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|params| rooms.get(params.room_id))
+                            .map(|room| RpcResponse::success(json!(room)))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "room.advance" => {
+                        let response = serde_json::from_value::<RoomIdParams>(command.request.params)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|params| {
+                                let mut room = rooms.get(params.room_id)?;
+                                room.advance(&node.advertisement.peer_id)?;
+                                rooms.save(&room)?;
+                                Ok(room)
+                            })
+                            .map(|room| RpcResponse::success(json!(room)))
+                            .unwrap_or_else(RpcResponse::failure);
+                        let _ = command.reply.send(response);
+                    }
+                    "room.ingest" => {
+                        let response = serde_json::from_value::<RoomIngestParams>(command.request.params)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|params| rooms.ingest_payload(
+                                params.envelope.id,
+                                &params.envelope.from_peer,
+                                &params.envelope.payload,
+                            ))
+                            .map(|room| RpcResponse::success(json!(room)))
                             .unwrap_or_else(RpcResponse::failure);
                         let _ = command.reply.send(response);
                     }
@@ -1395,6 +1588,7 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                         let _ = node.swarm.behaviour_mut().kademlia.start_providing(key);
                     }
                 }
+                #[cfg(not(target_os = "ios"))]
                 SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                     for (peer, address) in peers {
                         node.add_peer_address(peer, address.clone());
@@ -1403,6 +1597,7 @@ pub async fn daemon(options: DaemonOptions) -> Result<()> {
                         let _ = node.swarm.dial(address.with(Protocol::P2p(peer)));
                     }
                 }
+                #[cfg(not(target_os = "ios"))]
                 SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
                     for (peer, _) in peers {
                         node.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer);

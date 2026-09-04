@@ -13,6 +13,10 @@ test('parses the public fields needed to bootstrap a signed join code', () => {
   assert.deepEqual(parseJoinCode(code), ticket)
 })
 
+test('accepts a compact join hint for resolution by the Rust node', () => {
+  assert.deepEqual(parseJoinCode('mesh1h:AQIDBA'), { version: 1, hint: true })
+})
+
 test('explicit bind address wins and creates a private-network config', () => {
   assert.equal(chooseBindAddress('10.20.30.40'), '10.20.30.40')
   assert.deepEqual(

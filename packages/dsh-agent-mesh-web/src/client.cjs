@@ -13,7 +13,7 @@ module.exports = function define(require) {
     local: '本机', directPrivate: '私网直连', directPublic: '公网直连', relayed: '中继', unknown: '未知路由',
     localMeta: '本机信息', leaderMeta: 'Leader 能力', peerMeta: '节点信息', noPeers: '尚未发现其他节点。加入网络或等待 rendezvous 发现后，这里会自动出现。',
     allowlistWarning: '当前节点未允许任何远端 Peer；除非配置 allowAllPeers，否则只能看到节点，不能接受其传输或任务。',
-    peerId: 'Peer ID', name: '名称', network: '网络', mode: '运行模式', region: '区域', zone: '可用区',
+    peerId: 'Peer ID', name: '名称', network: '网络', mode: '运行模式', nodeRole: '节点角色', watcher: 'Watcher', worker: 'Worker', region: '区域', zone: '可用区',
     route: '路由', rtt: 'RTT', load: '负载', addresses: '地址', listen: '监听地址', bootstrap: 'Bootstrap',
     allowPolicy: '接入策略', allowAll: '允许所有 Peer', allowListed: '仅允许列表', allowNone: '未允许远端 Peer',
     privateNetworks: '私网标识', bandwidth: '配置带宽（入 / 出）', pricing: '价格（空闲 / 忙时）', currency: '币种',
@@ -34,7 +34,7 @@ module.exports = function define(require) {
     local: 'Local', directPrivate: 'Private direct', directPublic: 'Public direct', relayed: 'Relayed', unknown: 'Unknown route',
     localMeta: 'Local metadata', leaderMeta: 'Leader capability', peerMeta: 'Peer metadata', noPeers: 'No peers discovered yet. Join a network or wait for rendezvous discovery.',
     allowlistWarning: 'No remote peer is allowed. Unless allowAllPeers is enabled, peers can be discovered but cannot submit transfers or tasks.',
-    peerId: 'Peer ID', name: 'Name', network: 'Network', mode: 'Mode', region: 'Region', zone: 'Zone',
+    peerId: 'Peer ID', name: 'Name', network: 'Network', mode: 'Mode', nodeRole: 'Node role', watcher: 'Watcher', worker: 'Worker', region: 'Region', zone: 'Zone',
     route: 'Route', rtt: 'RTT', load: 'Load', addresses: 'Addresses', listen: 'Listen addresses', bootstrap: 'Bootstrap',
     allowPolicy: 'Admission policy', allowAll: 'Allow every peer', allowListed: 'Allowlist only', allowNone: 'No remote peers allowed',
     privateNetworks: 'Private network tags', bandwidth: 'Configured bandwidth (in / out)', pricing: 'Price (idle / busy)', currency: 'Currency',
@@ -159,7 +159,7 @@ module.exports = function define(require) {
   function PeerCard({ peer, t }) {
     const cap = peer.capabilities; const leader = cap.leader
     const rows = [
-      [t('peerId'), peer.peer_id, true], [t('network'), peer.network_id], [t('region'), cap.region], [t('zone'), cap.zone],
+      [t('peerId'), peer.peer_id, true], [t('network'), peer.network_id], [t('nodeRole'), t(cap.node_role || 'worker')], [t('region'), cap.region], [t('zone'), cap.zone],
       [t('load'), `${formatNumber((cap.load || 0) * 100)}%`], [t('bandwidth'), `${formatNumber(cap.ingress_mbps)} / ${formatNumber(cap.egress_mbps)} Mbps`],
       [t('pricing'), `${formatNumber(cap.idle_price_per_gib)} / ${formatNumber(cap.busy_price_per_gib)} ${cap.currency || ''}`],
       [t('storage'), formatBytes(cap.storage_free_bytes)], [t('inventory'), `${peer.inventory.object_count} · ${formatBytes(peer.inventory.total_bytes)}`],
@@ -168,7 +168,7 @@ module.exports = function define(require) {
     if (leader) rows.push([t('protocols'), list(leader.protocols, t)], [t('roles'), list(leader.roles, t)], [t('workspaces'), list(leader.workspaces, t)], [t('team'), t(leader.team_enabled ? 'enabled' : 'disabled')], [t('parallel'), String(leader.max_parallel_tasks)])
     return h('article', { className: 'am-peer' },
       h('div', { className: 'am-peer-head' }, h('h4', { className: 'am-peer-title' }, peer.name || peer.peer_id),
-        h('div', { className: 'am-badges' }, h('span', { className: 'am-badge', 'data-route': peer.route }, routeLabel(peer.route, t)), h('span', { className: 'am-badge' }, `${formatNumber(peer.rtt_ms)} ms`), leader ? h('span', { className: 'am-badge' }, t('leader')) : null)),
+        h('div', { className: 'am-badges' }, h('span', { className: 'am-badge', 'data-route': peer.route }, routeLabel(peer.route, t)), h('span', { className: 'am-badge' }, `${formatNumber(peer.rtt_ms)} ms`), h('span', { className: 'am-badge' }, t(cap.node_role || 'worker')))),
       h(Facts, { rows }))
   }
 

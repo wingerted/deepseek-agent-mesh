@@ -11,3 +11,8 @@ __pycache__/
 *.py[cod]
 *.local.toml
 .env.local
+apps/ios/Vendor/
+apps/ios/build/
+apps/ios/build-device/
+.DS_Store
+xcuserdata/

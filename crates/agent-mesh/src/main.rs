@@ -1,31 +1,23 @@
-mod envelope;
-mod identity;
-mod ipc;
-mod mailbox;
-mod membership;
-mod model;
-mod network;
-mod planner;
-mod protocol;
-mod store;
-
 use std::{
     collections::{BTreeSet, HashSet},
     net::SocketAddr,
     path::PathBuf,
 };
 
+use agent_mesh::{
+    envelope::EnvelopeKind,
+    identity, ipc,
+    mailbox::Mailbox,
+    membership::{JoinHint, JoinTicket, MembershipManager},
+    model::{AgentCapabilities, LeaderCapabilities, NodeRole},
+    network::{self, NodeOptions},
+    planner::OptimizeFor,
+    store::ObjectStore,
+};
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use envelope::EnvelopeKind;
 use libp2p::Multiaddr;
 use libp2p::PeerId;
-use mailbox::Mailbox;
-use membership::{JoinTicket, MembershipManager};
-use model::{AgentCapabilities, LeaderCapabilities};
-use network::NodeOptions;
-use planner::OptimizeFor;
-use store::ObjectStore;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -318,6 +310,9 @@ async fn main() -> Result<()> {
     }
 
     let join_ticket = match &cli.command {
+        Command::Join { code } if code.trim().starts_with("mesh1h:") => {
+            Some(network::resolve_join_hint(keypair.clone(), JoinHint::decode(code)?).await?)
+        }
         Command::Join { code } => Some(JoinTicket::decode(code)?),
         _ => None,
     };
@@ -356,6 +351,11 @@ async fn main() -> Result<()> {
         max_parallel_tasks: cli.leader_max_parallel_tasks.max(1),
     });
     let capabilities = AgentCapabilities {
+        node_role: if leader.is_some() {
+            NodeRole::Leader
+        } else {
+            NodeRole::Worker
+        },
         region: cli.region,
         zone: cli.zone,
         currency: cli.currency,

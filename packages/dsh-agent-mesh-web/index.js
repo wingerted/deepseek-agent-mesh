@@ -117,6 +117,7 @@ function normalizePeer(peer) {
       total_bytes: inventory.reduce((sum, item) => sum + integer(object(item).size), 0),
     },
     capabilities: {
+      node_role: text(capabilities.node_role) || (Object.keys(leader).length === 0 ? 'worker' : 'leader'),
       region: text(capabilities.region),
       zone: text(capabilities.zone),
       currency: text(capabilities.currency),

@@ -17,6 +17,7 @@ function context(overrides = {}) {
       agent_name: 'remote-node', network_id: 'mesh-a', issued_at: '2026-09-03T00:00:00Z',
       expires_at: '2026-09-03T01:00:00Z', listen_addresses: ['/ip4/10.0.0.2/tcp/41001'],
       capabilities: {
+        node_role: 'leader',
         region: 'cn-east', zone: 'az-1', private_networks: ['vpc-a'], currency: 'CNY',
         storage_free_bytes: 4096, ingress_mbps: 1000, egress_mbps: 100, load: 0.2,
         idle_price_per_gib: 0.3, busy_price_per_gib: 0.5, relay: false,
@@ -72,6 +73,7 @@ test('buildSnapshot returns bounded browser-safe node, leader and topology metad
   assert.equal(snapshot.peers[0].route, 'DirectPrivate')
   assert.equal(snapshot.peers[0].inventory.total_bytes, 400)
   assert.deepEqual(snapshot.peers[0].capabilities.leader.roles, ['review'])
+  assert.equal(snapshot.peers[0].capabilities.node_role, 'leader')
   assert.deepEqual(snapshot.topology, { node_count: 2, edge_count: 1 })
 })
 

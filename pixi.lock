@@ -51,6 +51,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/rattler-build-0.75.0-hf01adef_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ripgrep-15.2.0-hf19af3b_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/rust-1.98.0-hc89c8c8_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-1.98.0-unix_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-sim-1.98.0-unix_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-x86_64-unknown-linux-gnu-1.98.0-h2c6d0dc_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.28-h4ee821c_9.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
@@ -90,6 +92,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ripgrep-15.2.0-hc2d82ec_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/rust-1.98.0-h4ff7c5d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-darwin-1.98.0-hf6ec828_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-1.98.0-unix_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-sim-1.98.0-unix_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -988,6 +992,28 @@ packages:
   license_family: MIT
   size: 35549846
   timestamp: 1787578461376
+- conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-1.98.0-unix_0.conda
+  sha256: 5e0dc28e58341e9859559e87d342fd0301314695c071214c81c287a8e7f10aca
+  md5: 622d24500404049a938a99f379dfcd35
+  depends:
+  - __unix
+  constrains:
+  - rust >=1.98.0,<1.98.1.0a0
+  license: MIT
+  license_family: MIT
+  size: 34127161
+  timestamp: 1787578962245
+- conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-ios-sim-1.98.0-unix_0.conda
+  sha256: cd788f57576e374c2a1d3f6cf898039096c675e2bcf8ee28597311bef63bff7d
+  md5: e753dcaa21d86fd5643fc03d9a038c1e
+  depends:
+  - __unix
+  constrains:
+  - rust >=1.98.0,<1.98.1.0a0
+  license: MIT
+  license_family: MIT
+  size: 34883520
+  timestamp: 1787579006061
 - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-x86_64-unknown-linux-gnu-1.98.0-h2c6d0dc_0.conda
   sha256: ba8d4cce49d13423204ed98422a52d33f36307f03801c8b31e15bd642013d722
   md5: 6b0ee2ea14ff3ed5096dbf4d8103d5de
