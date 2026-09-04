@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 
 export const name = 'agent-mesh-leader'
-export const inject = ['agents', 'mesh']
+export const inject = ['agents', 'mesh', 'typert']
 
 const STATE_VERSION = 2
 
@@ -34,6 +34,22 @@ export class MeshLeaderRuntime extends Service {
     return [...this.leaderSessionIds]
       .map(sessionId => this.runtimeCtx.agents.get(sessionId))
       .filter(agent => agent !== undefined)
+  }
+
+  async wakeBoundLeaders() {
+    const lookup = this.runtimeCtx.typert.lookups.get('agent')
+    if (lookup === undefined) {
+      this.runtimeCtx.logger.warn('Mesh Leader Sessions cannot be resumed: the Harness agent lookup is unavailable')
+      return
+    }
+    for (const sessionId of this.leaderSessionIds) {
+      if (this.runtimeCtx.agents.get(sessionId) !== undefined) continue
+      try {
+        await lookup.resolve(sessionId)
+      } catch (error) {
+        this.runtimeCtx.logger.warn(`Mesh Leader Session ${sessionId} could not be resumed: ${String(error)}`)
+      }
+    }
   }
 
   isLeader(agent) {
@@ -146,5 +162,6 @@ export class MeshLeaderRuntime extends Service {
 export async function apply(ctx) {
   const runtime = new MeshLeaderRuntime(ctx)
   await runtime.load()
+  await runtime.wakeBoundLeaders()
   void runtime
 }

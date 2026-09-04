@@ -14,6 +14,35 @@ function runtime(sessionIds = [], agents = new Map()) {
   return value
 }
 
+test('bound Leader Sessions resume through the Harness agent lookup', async () => {
+  const live = { id: 'session-live', status: 'idle' }
+  const agents = new Map([['session-live', live]])
+  const resumed = []
+  const warnings = []
+  const value = runtime(['session-live', 'session-cold', 'session-missing'], agents)
+  value.runtimeCtx.typert = {
+    lookups: {
+      get: key => key === 'agent' ? {
+        async resolve(sessionId) {
+          resumed.push(sessionId)
+          if (sessionId === 'session-missing') throw new Error('not found')
+          const agent = { id: sessionId, status: 'idle' }
+          agents.set(sessionId, agent)
+          return agent
+        },
+      } : undefined,
+    },
+  }
+  value.runtimeCtx.logger = { warn: message => warnings.push(message) }
+
+  await value.wakeBoundLeaders()
+
+  assert.deepEqual(resumed, ['session-cold', 'session-missing'])
+  assert.deepEqual(value.leaders().map(agent => agent.id), ['session-live', 'session-cold'])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /session-missing.*not found/)
+})
+
 test('Leader status is lossless JSON with multiple live and stale Sessions', () => {
   const current = { id: 'session-b', status: 'running' }
   const view = runtime(
